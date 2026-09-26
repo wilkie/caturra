@@ -478,6 +478,7 @@ fn rewrite_expr(expr: &mut Expr, specs: &mut Vec<MockSpec>) {
             type_args: Vec::new(),
             args: ctor_args,
             outer: None,
+            raw: false,
             span,
         };
         return;

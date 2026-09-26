@@ -2313,10 +2313,12 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // A DIAMOND of a class the PROGRAM declares, whose argument the
         // constructor's own parameters say. The library diamonds fall through
         // to the copy-constructor arm below, which is what they need.
+        // A RAW `new Box(2)` is not one: its type is the raw class.
         Expr::NewObject {
             class,
             type_args,
             args,
+            raw: false,
             ..
         } if type_args.is_empty() && diamond_arguments(class, args, ctx).is_some() => {
             diamond_arguments(class, args, ctx).map(|args| TypeRef::Generic {
@@ -2818,6 +2820,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             type_args: Vec::new(),
             args: std::mem::take(args),
             outer: None,
+            raw: false,
             span: *span,
         };
     }
@@ -2945,6 +2948,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             type_args: Vec::new(),
             args: std::mem::take(args),
             outer: None,
+            raw: false,
             span: *span,
         };
     }
@@ -4659,6 +4663,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             type_args: Vec::new(),
             args: param_names.iter().map(|n| name_expr(n)).collect(),
             outer: None,
+            raw: false,
             span,
         }
     } else if let Some(class) = qualifier_class {
@@ -9158,6 +9163,7 @@ fn build_erased_lambda(
             type_args: Vec::new(),
             args: vec![inner],
             outer: None,
+            raw: false,
             span,
         };
     }
@@ -9427,6 +9433,7 @@ fn build_erased_lambda(
         type_args: Vec::new(),
         args: Vec::new(),
         outer: None,
+        raw: false,
         span,
     }
 }
@@ -9755,6 +9762,7 @@ fn build_lambda_class(
         type_args: Vec::new(),
         args: Vec::new(),
         outer: None,
+        raw: false,
         span,
     }
 }

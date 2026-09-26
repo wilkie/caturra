@@ -515,6 +515,26 @@ struct MethodSig {
 }
 
 impl MethodSig {
+    /// `name(params) in Owner` — how javac names a candidate in an ambiguity.
+    /// The owner is found by IDENTITY among the table's own signatures, so a
+    /// signature that was cloned out of the table says no owner.
+    fn describe_in(&self, table: &MethodTable) -> String {
+        let owner = table.classes.iter().find_map(|(name, info)| {
+            info.methods
+                .iter()
+                .any(|m| std::ptr::eq(m, self))
+                .then_some(name)
+        });
+        match owner {
+            Some(owner) => format!(
+                "{} in {}",
+                self.describe(table),
+                source_type_name(&described_type_name(owner))
+            ),
+            None => self.describe(table),
+        }
+    }
+
     fn describe(&self, table: &MethodTable) -> String {
         let params: Vec<String> = self.params.iter().map(|p| p.describe(table)).collect();
         format!("{}({})", self.name, params.join(","))
@@ -579,6 +599,10 @@ struct ClassInfo {
     /// `Some("Number")`). A written type ARGUMENT has to satisfy it, and
     /// without this `Box<String>` for a `Box<T extends Number>` compiled.
     type_param_bounds: Vec<Option<String>>,
+    /// Each parameter's NAME as the program wrote it — what javac's inference
+    /// diagnostics call the variable ("inference variable B has incompatible
+    /// bounds"). Empty for a library class.
+    type_param_names: Vec<String>,
     /// A LIBRARY class rather than one the program declared — either
     /// synthesized here (`Object`, the wrappers, `Comparable`) or parsed from
     /// a bundled source, whose units are lexed under an angle-bracketed path
@@ -994,6 +1018,7 @@ impl MethodTable {
                 is_inner: false,
                 type_param_count: 0,
                 type_param_bounds: Vec::new(),
+                type_param_names: Vec::new(),
                 is_bundled: true,
                 supertype_args: Vec::new(),
                 methods: vec![
@@ -1099,6 +1124,7 @@ impl MethodTable {
                 is_inner: false,
                 type_param_count: 1,
                 type_param_bounds: vec![None],
+                type_param_names: Vec::new(),
                 is_bundled: true,
                 supertype_args: Vec::new(),
                 methods: vec![MethodSig {
@@ -1160,6 +1186,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 0,
                     type_param_bounds: Vec::new(),
+                    type_param_names: Vec::new(),
                     is_bundled: true,
                     supertype_args: Vec::new(),
                     methods: if matches!(name, "Cloneable" | "RandomAccess") {
@@ -1292,6 +1319,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 1,
                     type_param_bounds: vec![None],
+                    type_param_names: Vec::new(),
                     is_bundled: true,
                     supertype_args: Vec::new(),
                     methods,
@@ -1348,6 +1376,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 0,
                     type_param_bounds: Vec::new(),
+                    type_param_names: Vec::new(),
                     is_bundled: true,
                     supertype_args: Vec::new(),
                     methods: vec![
@@ -1421,6 +1450,7 @@ impl MethodTable {
                     is_inner: false,
                     type_param_count: 1,
                     type_param_bounds: vec![None],
+                    type_param_names: Vec::new(),
                     is_bundled: true,
                     supertype_args: Vec::new(),
                     methods: vec![
@@ -1519,6 +1549,11 @@ impl MethodTable {
                         // whether anyone else's did depended on declaration
                         // ORDER.
                         type_param_count: class.type_params.len(),
+                        type_param_names: class
+                            .type_params
+                            .iter()
+                            .map(|p| p.name.clone())
+                            .collect(),
                         type_param_bounds: class
                             .type_params
                             .iter()
@@ -4420,6 +4455,16 @@ impl MethodTable {
         if self.info(class).is_none() {
             return Resolution::UnknownName;
         }
+        let named = self.named_methods(class, name);
+        if named.is_empty() {
+            return Resolution::UnknownName;
+        }
+        self.resolve_among(&named, args)
+    }
+
+    /// Every method a call of `name` on `class` can reach — the class's own,
+    /// then its ancestors' where not overridden, nearest first.
+    fn named_methods(&self, class: &str, name: &str) -> Vec<&MethodSig> {
         // Walk the chain (and interfaces, for interface receivers),
         // nearest declaration first; an override shadows its ancestor.
         let mut named: Vec<&MethodSig> = Vec::new();
@@ -4511,9 +4556,10 @@ impl MethodTable {
         {
             named.extend(object.methods.iter().filter(|m| m.name == name));
         }
-        if named.is_empty() {
-            return Resolution::UnknownName;
-        }
+        named
+    }
+
+    fn resolve_among<'m>(&self, named: &[&'m MethodSig], args: &[JType]) -> Resolution<'m> {
         // JLS §15.12.2 runs in PHASES: everything applicable without boxing
         // (phase 1) is considered first, and only if nothing matches does
         // boxing enter the running (phase 2). Conflating the two made
@@ -4572,7 +4618,7 @@ impl MethodTable {
                         Resolution::Ambiguous(
                             varargs_applicable
                                 .iter()
-                                .map(|m| m.describe(self))
+                                .map(|m| m.describe_in(self))
                                 .collect(),
                         )
                     }
@@ -4604,7 +4650,7 @@ impl MethodTable {
                 if most_specific.len() == 1 {
                     Resolution::Found(most_specific[0])
                 } else {
-                    Resolution::Ambiguous(applicable.iter().map(|m| m.describe(self)).collect())
+                    Resolution::Ambiguous(applicable.iter().map(|m| m.describe_in(self)).collect())
                 }
             }
         }
@@ -8001,27 +8047,41 @@ fn constructor_infer_plan(
     method: &MethodDecl,
 ) -> Option<crate::ast::ReturnPlan> {
     use crate::ast::InferSource;
-    let [param] = class.type_params.as_slice() else {
-        return None;
-    };
-    let var = &param.name;
-    let sources: Vec<InferSource> = method
-        .declared_params
-        .iter()
-        .enumerate()
-        .filter_map(|(index, ty)| match ty {
-            TypeRef::Named(name) if name == var => Some(InferSource::Direct(index)),
-            TypeRef::Generic { args, .. } => match args.as_slice() {
-                [TypeRef::Named(name)] if name == var => Some(InferSource::Element(index)),
+    // One variable, or two — `Pair<A, B>` is the shape a student writes, and
+    // the plan's `second` list is where a second argument is pinned. With
+    // three or more the diamond stays raw, as every one did before.
+    let sources_of = |var: &str| -> Vec<InferSource> {
+        method
+            .declared_params
+            .iter()
+            .enumerate()
+            .filter_map(|(index, ty)| match ty {
+                TypeRef::Named(name) if name == var => Some(InferSource::Direct(index)),
+                TypeRef::Generic { args, .. } => match args.as_slice() {
+                    [TypeRef::Named(name)] if name == var => Some(InferSource::Element(index)),
+                    _ => None,
+                },
                 _ => None,
-            },
-            _ => None,
-        })
-        .collect();
+            })
+            .collect()
+    };
+    let (sources, second) = match class.type_params.as_slice() {
+        [only] => (sources_of(&only.name), Vec::new()),
+        // Both variables must be pinned, or the diamond is not typed at all:
+        // a `Pair<String, ?>` half-known is not a type this file can hold.
+        [first, other] => {
+            let second = sources_of(&other.name);
+            if second.is_empty() {
+                return None;
+            }
+            (sources_of(&first.name), second)
+        }
+        _ => return None,
+    };
     (!sources.is_empty()).then_some(crate::ast::ReturnPlan {
         container: false,
         sources,
-        second: Vec::new(),
+        second,
     })
 }
 
@@ -8086,6 +8146,41 @@ fn join_sources(
         }
     }
     joined
+}
+
+/// Whether two parameterizations of ONE class agree on every argument after
+/// the first (the first is compared by the caller). Every argument is
+/// invariant — a `Pair<String, Integer>` is no `Pair<String, String>` — but
+/// only where both sides KNOW it: a side that never learned its later
+/// arguments (`NO_TYPE_ARGS`), or still holds a type VARIABLE there (a
+/// parameter read through a receiver that did not substitute it), is not held
+/// to them.
+fn later_arguments_agree(
+    table: &MethodTable,
+    from_arg: ElemType,
+    from_rest: TypeArgsId,
+    to_arg: ElemType,
+    to_rest: TypeArgsId,
+) -> bool {
+    if from_rest == to_rest || from_rest == NO_TYPE_ARGS || to_rest == NO_TYPE_ARGS {
+        return true;
+    }
+    (1..=u8::MAX)
+        .map(|index| {
+            (
+                table.type_arg(from_arg, from_rest, index),
+                table.type_arg(to_arg, to_rest, index),
+            )
+        })
+        .take_while(|pair| *pair != (None, None))
+        .all(|pair| match pair {
+            (Some(from), Some(to)) => {
+                from == to
+                    || matches!(from, ElemType::TypeVar(_))
+                    || matches!(to, ElemType::TypeVar(_))
+            }
+            _ => true,
+        })
 }
 
 /// Two faces of the SAME collection type joined at the face both are: a
@@ -8480,18 +8575,23 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                 JType::Generic {
                     class: sub,
                     arg: from_arg,
-                    ..
+                    rest: from_rest,
                 },
                 JType::Generic {
                     class: sup,
                     arg: to_arg,
-                    ..
+                    rest: to_rest,
                 },
             ) if table.is_subtype(sub, sup)
                 && match table.generic_supertype_arg(sub, sup) {
                     Some(ElemType::TypeVar(_)) | None => from_arg == to_arg,
                     Some(written) => written == to_arg,
                 }
+                // The SAME class: every argument is invariant, not only the
+                // first — a `Pair<String, Integer>` is no `Pair<String,
+                // String>`. A side that never learned the rest (NO_TYPE_ARGS)
+                // is not held to it.
+                && (sub != sup || later_arguments_agree(table, from_arg, from_rest, to_arg, to_rest))
         )
         || matches!(
             (from, to),
@@ -26923,11 +27023,13 @@ fn bparam_java_name(param: BParam) -> Option<&'static str> {
 /// the word is "both", and a list of nine after it is not a sentence — so this
 /// takes the first two of the maximally specific set.
 fn ambiguous_message(method: &str, candidates: &[String]) -> String {
+    // javac's two lines: the headline, then the two methods on a continuation
+    // line, each with the class that declares it.
     match candidates {
         [first, second, ..] => format!(
-            "reference to {method} is ambiguous: both method {first} and method {second} match"
+            "reference to {method} is ambiguous\n  both method {first} and method {second} match"
         ),
-        [only] => format!("reference to {method} is ambiguous: method {only} matches"),
+        [only] => format!("reference to {method} is ambiguous\n  method {only} matches"),
         [] => format!("reference to {method} is ambiguous"),
     }
 }
@@ -28921,7 +29023,7 @@ impl BodyGen<'_> {
             (Some(expected), Some(value)) => {
                 let actual = self.expr_toward(value, expected);
                 let value_const = self.const_int(value);
-                self.convert_for_assignment_const(actual, expected, value.span(), value_const);
+                self.convert_value(value, actual, expected, value_const);
                 // Enclosing finally blocks run before the method exits, and
                 // the value being returned is PARKED IN A LOCAL while they do
                 // — not left on the operand stack. A handler entered anywhere
@@ -29478,7 +29580,7 @@ impl BodyGen<'_> {
                         init_ty
                     };
                     let init_const = self.const_int(init);
-                    self.convert_for_assignment_const(init_ty, var_ty, init.span(), init_const);
+                    self.convert_value(init, init_ty, var_ty, init_const);
                 }
                 self.emit_store(slot, var_ty);
                 true
@@ -29688,7 +29790,15 @@ impl BodyGen<'_> {
                 JType::Generic { class, .. } | JType::Object(class) => {
                     elem_widens_to_class(from, class, self.table)
                 }
-                _ => from == to,
+                // A container reaching a container: `new Pair<>("k", new
+                // ArrayList<>(tags))` for a `Pair<String, List<Tag>>` — the
+                // argument pinned `ArrayList<Tag>`, a subtype of what the
+                // target says the variable is.
+                target => {
+                    from == to
+                        || (matches!(from, ElemType::Nested { .. })
+                            && widens(elem_value_type(from, self.table), target, self.table))
+                }
             },
             _ => from == to,
         };
@@ -29717,8 +29827,9 @@ impl BodyGen<'_> {
             // any other: `Box<Shape> b = new Box<>(new Circle());` is the
             // ordinary way to fill a container of a supertype, and reading the
             // argument instead made it "Box<Circle> cannot be converted to
-            // Box<Shape>". Only the FIRST argument varies here; the rest have
-            // to match, since nothing widens two of them independently.
+            // Box<Shape>". Each argument widens on its own — a diamond infers
+            // every variable from the target — so `Pair<Object, Number> p =
+            // new Pair<>("s", 3)` adopts both.
             (
                 JType::Generic {
                     class: from_class,
@@ -29730,7 +29841,23 @@ impl BodyGen<'_> {
                     arg: to_arg,
                     rest: to_rest,
                 },
-            ) => from_class == to_class && from_rest == to_rest && widens(from_arg, to_arg),
+            ) => {
+                from_class == to_class
+                    && widens(from_arg, to_arg)
+                    && (from_rest == to_rest
+                        || (1..=u8::MAX)
+                            .map(|index| {
+                                (
+                                    self.table.type_arg(from_arg, from_rest, index),
+                                    self.table.type_arg(to_arg, to_rest, index),
+                                )
+                            })
+                            .take_while(|pair| *pair != (None, None))
+                            .all(|pair| match pair {
+                                (Some(from), Some(to)) => widens(from, to),
+                                _ => false,
+                            }))
+            }
             (
                 JType::Map {
                     key: from_key,
@@ -29954,7 +30081,7 @@ impl BodyGen<'_> {
                 }
                 let value_ty = self.expr_toward(value, var_ty);
                 let value_const = self.const_int(value);
-                self.convert_for_assignment_const(value_ty, var_ty, value.span(), value_const);
+                self.convert_value(value, value_ty, var_ty, value_const);
                 self.emit_store(slot, var_ty);
                 if let Some(var) = self.lookup(name) {
                     var.assigned = true;
@@ -30377,7 +30504,7 @@ impl BodyGen<'_> {
             None => {
                 let value_ty = self.expr_toward(value, field.ty);
                 let value_const = self.const_int(value);
-                self.convert_for_assignment_const(value_ty, field.ty, value.span(), value_const);
+                self.convert_value(value, value_ty, field.ty, value_const);
                 if keep {
                     self.dup_stored_value(field.ty, u8::from(!is_static));
                 }
@@ -30618,7 +30745,7 @@ impl BodyGen<'_> {
         } else {
             let init_ty = self.expr_toward(init, ty);
             let init_const = self.const_int(init);
-            self.convert_for_assignment_const(init_ty, ty, init.span(), init_const);
+            self.convert_value(init, init_ty, ty, init_const);
         }
         let field_ref = intern_field_ref(
             self.pool,
@@ -31564,7 +31691,13 @@ impl BodyGen<'_> {
     }
 
     #[allow(clippy::too_many_lines)] // one arm per constructible library type
-    fn type_of_new_object(&mut self, class: &str, type_args: &[TypeRef], args: &[Expr]) -> JType {
+    fn type_of_new_object(
+        &mut self,
+        class: &str,
+        type_args: &[TypeRef],
+        args: &[Expr],
+        raw: bool,
+    ) -> JType {
         // Matches `new_simple_entry`. A diamond types as `Null` (assignable
         // to any `Map.Entry`), like the other diamond constructors here.
         if matches!(
@@ -31583,11 +31716,11 @@ impl BodyGen<'_> {
             // `List<Node<String>>` — while the same `new` through a variable
             // was refused.
             let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
-            return match self.new_object_argument(class, type_args, &arg_types) {
-                Some(arg) => JType::Generic {
+            return match self.new_object_argument(class, type_args, raw, &arg_types) {
+                Some((arg, rest)) => JType::Generic {
                     class: id,
                     arg,
-                    rest: NO_TYPE_ARGS,
+                    rest,
                 },
                 None => JType::Object(id),
             };
@@ -31862,6 +31995,7 @@ impl BodyGen<'_> {
         type_args: &[TypeRef],
         args: &[Expr],
         outer: Option<&Expr>,
+        raw: bool,
         span: SourceSpan,
     ) -> JType {
         // The simple name (a qualified `Outer.Inner` flattens to `Inner`).
@@ -31893,14 +32027,14 @@ impl BodyGen<'_> {
                 self.error(span, "qualified new of static class");
                 return JType::Error;
             }
-            return self.new_object(class_name, type_args, args, span);
+            return self.new_object(class_name, type_args, args, raw, span);
         }
         let enclosing = match self.table.field(simple, crate::capture::OUTER_FIELD) {
             Some((_, field)) => match field.ty {
                 JType::Object(enc) => enc,
-                _ => return self.new_object(class_name, type_args, args, span),
+                _ => return self.new_object(class_name, type_args, args, raw, span),
             },
-            None => return self.new_object(class_name, type_args, args, span),
+            None => return self.new_object(class_name, type_args, args, raw, span),
         };
         let bound: Option<Expr> = if let Some(o) = outer {
             Some(o.clone())
@@ -31969,7 +32103,7 @@ impl BodyGen<'_> {
         let mut all = Vec::with_capacity(args.len() + 1);
         all.push(bound);
         all.extend(args.iter().cloned());
-        let created = self.new_object(simple, type_args, &all, span);
+        let created = self.new_object(simple, type_args, &all, raw, span);
         match (created, from_outer) {
             (JType::Object(id), Some((arg, rest)))
                 if self
@@ -31993,6 +32127,7 @@ impl BodyGen<'_> {
         class_name: &str,
         type_args: &[TypeRef],
         args: &[Expr],
+        raw: bool,
         span: SourceSpan,
     ) -> JType {
         // `new AbstractMap.SimpleEntry<>(k, v)` — the JDK's standalone
@@ -32290,7 +32425,7 @@ impl BodyGen<'_> {
         // `Arrays.asList(new Node<Integer>(5))` would not assign to the
         // `List<Node<Integer>>` beside it, and did assign to a
         // `List<Node<String>>`.
-        let argument = self.new_object_argument(class_name, type_args, &arg_types);
+        let argument = self.new_object_argument(class_name, type_args, raw, &arg_types);
         // Emit the name the CLASS FILE carries — a nested class's is
         // `Outer$Inner`, while the source (and every diagnostic above) says
         // the simple one.
@@ -32303,7 +32438,7 @@ impl BodyGen<'_> {
         // diamond that infers the same. Without it the conversion saw a bare
         // variable and refused every `new` of a generic class that takes one.
         let outer = match argument {
-            Some(arg) => self.receiver_args.replace((arg, NO_TYPE_ARGS)),
+            Some(arg) => self.receiver_args.replace(arg),
             None => self.receiver_args.take(),
         };
         let args_width = self.emit_call_args(args, &sig, span);
@@ -32313,10 +32448,10 @@ impl BodyGen<'_> {
         self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
         self.code.drop_stack(1 + args_width);
         match argument {
-            Some(arg) => JType::Generic {
+            Some((arg, rest)) => JType::Generic {
                 class: class_id,
                 arg,
-                rest: NO_TYPE_ARGS,
+                rest,
             },
             None => JType::Object(class_id),
         }
@@ -32331,14 +32466,22 @@ impl BodyGen<'_> {
         &mut self,
         class_name: &str,
         type_args: &[TypeRef],
+        raw: bool,
         arg_types: &[JType],
-    ) -> Option<ElemType> {
+    ) -> Option<(ElemType, TypeArgsId)> {
+        // A RAW `new Box(2)` infers nothing: its type is the raw class, which
+        // any `Box<…>` accepts with an unchecked warning. Inferring from the
+        // arguments as a diamond does made `Box<String> b = new Box(2);` —
+        // legal, if unwise — a refused program.
+        if raw {
+            return None;
+        }
         if !type_args.is_empty() {
             return match self.table.resolve_type(&TypeRef::Generic {
                 base: String::from(class_name),
                 args: type_args.to_vec(),
             }) {
-                Some(JType::Generic { arg, .. }) => Some(arg),
+                Some(JType::Generic { arg, rest, .. }) => Some((arg, rest)),
                 _ => None,
             };
         }
@@ -32372,16 +32515,42 @@ impl BodyGen<'_> {
     /// when the class tracks no argument, when no parameter mentions the
     /// variable, or when the arguments pin two different types — the raw type
     /// then stands, as it did for every `new` before.
-    fn diamond_argument(&mut self, sig: &MethodSig, arg_types: &[JType]) -> Option<ElemType> {
-        use crate::ast::InferSource;
+    fn diamond_argument(
+        &mut self,
+        sig: &MethodSig,
+        arg_types: &[JType],
+    ) -> Option<(ElemType, TypeArgsId)> {
         let plan = sig.ret_infer.as_ref()?;
+        let first = self.diamond_pinned(&plan.sources, arg_types)?;
+        if plan.second.is_empty() {
+            return Some((first, NO_TYPE_ARGS));
+        }
+        let second = self.diamond_pinned(&plan.second, arg_types)?;
+        Some((first, self.table.intern_type_args(&[second])))
+    }
+
+    /// What one list of a diamond's sources pins, as a type argument.
+    fn diamond_pinned(
+        &mut self,
+        sources: &[crate::ast::InferSource],
+        arg_types: &[JType],
+    ) -> Option<ElemType> {
+        use crate::ast::InferSource;
         let mut joined: Option<JType> = None;
-        for &source in &plan.sources {
+        let mut saw_null = false;
+        for &source in sources {
             let (InferSource::Direct(index)
             | InferSource::Element(index)
             | InferSource::LambdaResult(index)
             | InferSource::ElementResult(index, _)) = source;
             let &arg = arg_types.get(index)?;
+            // A `null` pins nothing: it converts to whatever the others say,
+            // and when nothing else speaks the variable is `Object` — javac's
+            // `new Pair<>(null, 2)` is a `Pair<Object, Integer>`.
+            if arg == JType::Null && matches!(source, InferSource::Direct(_)) {
+                saw_null = true;
+                continue;
+            }
             let arg = match source {
                 InferSource::Direct(_) => arg,
                 InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
@@ -32399,6 +32568,9 @@ impl BodyGen<'_> {
                 Some(prev) if prev == reference => {}
                 Some(_) => return None,
             }
+        }
+        if joined.is_none() && saw_null {
+            return Some(ElemType::Object(self.table.object_id));
         }
         value_elem_of(joined?, self.table)
     }
@@ -35135,8 +35307,8 @@ impl BodyGen<'_> {
                         // the class decides, so try the shapes rather than
                         // keeping a second list of which class takes which.
                         let widened = [
-                            self.type_of_new_object(&class, std::slice::from_ref(&object), &[]),
-                            self.type_of_new_object(&class, &[object.clone(), object], &[]),
+                            self.type_of_new_object(&class, std::slice::from_ref(&object), &[], false),
+                            self.type_of_new_object(&class, &[object.clone(), object], &[], false),
                         ]
                         .into_iter()
                         .find(|ty| !matches!(ty, JType::Null))
@@ -37551,6 +37723,15 @@ impl BodyGen<'_> {
                 return None;
             }
         };
+        let sig = match self.conditional_resolution(&class_name, method, args, &arg_types, &sig)
+        {
+            Ok(None) => sig,
+            Ok(Some(better)) => better,
+            Err(message) => {
+                self.error(span, message);
+                return None;
+            }
+        };
         if sig.is_private && !self.table.shares_top_level(class_id, self.current_class_id) {
             self.error(
                 span,
@@ -39403,6 +39584,14 @@ impl BodyGen<'_> {
             }
             Resolution::Ambiguous(candidates) => {
                 self.error(span, ambiguous_message(method, &candidates));
+                return None;
+            }
+        };
+        let sig = match self.conditional_resolution(class, method, args, &arg_types, &sig) {
+            Ok(None) => sig,
+            Ok(Some(better)) => better,
+            Err(message) => {
+                self.error(span, message);
                 return None;
             }
         };
@@ -41403,16 +41592,22 @@ impl BodyGen<'_> {
         candidates: &[Vec<JType>],
         args: &[Expr],
         arg_types: &[JType],
+        conditionals: &[(usize, usize)],
     ) -> Option<Vec<JType>> {
-        let adopts = |at: usize, param: JType| {
-            args.get(at).is_some_and(mints_a_collection)
-                && self.elements_widen(arg_types[at], param)
-        };
         let mut reached: Option<Vec<JType>> = None;
-        for params in candidates {
+        for (which, params) in candidates.iter().enumerate() {
             if params.len() != args.len() {
                 continue;
             }
+            // A fresh collection adopts the parameter's element; a reference
+            // CONDITIONAL whose every branch reaches the parameter adopts the
+            // parameter itself (JLS §15.25.3 — in an invocation context it is
+            // a poly expression, typed by its target).
+            let adopts = |at: usize, param: JType| {
+                (args.get(at).is_some_and(mints_a_collection)
+                    && self.elements_widen(arg_types[at], param))
+                    || conditionals.contains(&(which, at))
+            };
             let fits = params
                 .iter()
                 .enumerate()
@@ -41533,17 +41728,108 @@ impl BodyGen<'_> {
 
     /// Resolve again with those adopted argument types, when they exist.
     fn poly_retry(
-        &self,
+        &mut self,
         class: &str,
         method: &str,
         candidates: &[Vec<JType>],
         args: &[Expr],
         arg_types: &[JType],
     ) -> Option<MethodSig> {
-        let adopted = self.poly_argument_types(candidates, args, arg_types)?;
+        // Which (candidate, argument) pairs are a conditional that can take
+        // that parameter as its type — asked here, where the branches can be
+        // typed.
+        let mut conditionals = Vec::new();
+        for (which, params) in candidates.iter().enumerate() {
+            if params.len() != args.len() {
+                continue;
+            }
+            for (at, (arg, param)) in args.iter().zip(params).enumerate() {
+                if matches!(arg, Expr::Ternary { .. })
+                    && self.ternary_adopts_target(arg, arg_types[at], *param)
+                {
+                    conditionals.push((which, at));
+                }
+            }
+        }
+        let adopted = self.poly_argument_types(candidates, args, arg_types, &conditionals)?;
         match self.table.resolve(class, method, &adopted) {
             Resolution::Found(sig) => Some(sig.clone()),
             _ => None,
+        }
+    }
+
+    /// A reference CONDITIONAL argument is a poly expression: it fits every
+    /// overload whose parameter each of its branches reaches, not only the
+    /// one its join names (JLS §15.12.2.2 with §15.25.3). Resolution by the
+    /// join chose `both(Shape)` for two classes implementing `Shape` AND
+    /// `Drawable`, where javac finds `both(Drawable)` applicable as well and
+    /// calls the call ambiguous — and it chose `both(Object)` where javac
+    /// picks the more specific `both(Drawable)`. `Ok(Some(sig))` is the
+    /// method the call really resolves to when that differs, `Err` javac's
+    /// ambiguity.
+    fn conditional_resolution(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        arg_types: &[JType],
+        chosen: &MethodSig,
+    ) -> Result<Option<MethodSig>, String> {
+        let conditional = |at: usize| {
+            matches!(args.get(at), Some(Expr::Ternary { .. }))
+                && arg_types[at].is_reference()
+                && arg_types[at] != JType::Null
+        };
+        if !(0..args.len()).any(conditional) {
+            return Ok(None);
+        }
+        let table = self.table;
+        let overloads: Vec<&MethodSig> = table
+            .named_methods(class, method)
+            .into_iter()
+            .filter(|m| m.params.len() == args.len() && !m.is_varargs)
+            .collect();
+        let mut applicable: Vec<&MethodSig> = Vec::new();
+        for m in overloads {
+            let mut fits = true;
+            for (at, param) in m.params.iter().enumerate() {
+                let reaches = widens(arg_types[at], *param, self.table)
+                    || (conditional(at)
+                        && self.ternary_adopts_target(&args[at], arg_types[at], *param));
+                if !reaches {
+                    fits = false;
+                    break;
+                }
+            }
+            if fits {
+                applicable.push(m);
+            }
+        }
+        if applicable.len() < 2 {
+            return Ok(None);
+        }
+        let most_specific: Vec<&MethodSig> = applicable
+            .iter()
+            .copied()
+            .filter(|m| {
+                applicable.iter().all(|other| {
+                    m.params
+                        .iter()
+                        .zip(&other.params)
+                        .all(|(a, b)| widens(*a, *b, self.table))
+                })
+            })
+            .collect();
+        match most_specific.as_slice() {
+            [only] if only.params == chosen.params => Ok(None),
+            [only] => Ok(Some((*only).clone())),
+            _ => Err(ambiguous_message(
+                method,
+                &applicable
+                    .iter()
+                    .map(|m| m.describe_in(table))
+                    .collect::<Vec<_>>(),
+            )),
         }
     }
 
@@ -41558,10 +41844,27 @@ impl BodyGen<'_> {
     ) {
         let (message, blamed) =
             inapplicable_report(method, class_description, candidates, arg_types, self.table);
+        // A DIAMOND argument whose inference failed is javac's own complaint,
+        // exactly as in an assignment.
+        let message = match (blamed, candidates) {
+            (Some(index), [only]) if message.starts_with("incompatible types: ") => args
+                .get(index)
+                .zip(arg_types.get(index).zip(only.get(index)))
+                .and_then(|(arg, (&from, &to))| self.diamond_inference_failure(arg, from, to))
+                .unwrap_or(message),
+            _ => message,
+        };
         let at = blamed
             .and_then(|index| args.get(index))
             .map_or(span, Expr::span);
+        let before = self.diagnostics.len();
         self.error(at, message);
+        if let (Some(index), [only]) = (blamed, candidates)
+            && let (Some(arg), Some(&param)) = (args.get(index), only.get(index))
+            && self.diagnostics.len() > before
+        {
+            self.blame_conditional_branches(arg, param, before);
+        }
     }
 
     fn no_suitable_library_method(
@@ -43406,9 +43709,10 @@ impl BodyGen<'_> {
                 type_args,
                 args,
                 outer,
+                raw,
                 ..
             } => {
-                let created = self.type_of_new_object(class, type_args, args);
+                let created = self.type_of_new_object(class, type_args, args, *raw);
                 // `o.new Inner()` is an `Outer<String>.Inner`: an inner class
                 // inherits its outer's type parameters, and the qualifier
                 // carries the arguments. Must agree with `new_object_bound`,
@@ -43701,8 +44005,9 @@ impl BodyGen<'_> {
                 type_args,
                 args,
                 outer,
+                raw,
                 span,
-            } => self.new_object_bound(class, type_args, args, outer.as_deref(), *span),
+            } => self.new_object_bound(class, type_args, args, outer.as_deref(), *raw, *span),
             Expr::Ternary {
                 cond,
                 then,
@@ -48035,6 +48340,157 @@ impl BodyGen<'_> {
 
     fn convert_for_assignment(&mut self, from: JType, to: JType, span: SourceSpan) {
         self.convert_for_assignment_const(from, to, span, None);
+    }
+
+    /// `convert_for_assignment_const` for a VALUE whose expression is known:
+    /// the same check, and when the value is a DIAMOND that could not take the
+    /// target's arguments, javac's own account of it. javac does not say
+    /// `Pair<String,Integer> cannot be converted to Pair<String,String>` —
+    /// that type never existed; the diamond's inference failed, and the
+    /// message names the variable it could not pin.
+    fn convert_value(&mut self, value: &Expr, from: JType, to: JType, constant: Option<i64>) {
+        let before = self.diagnostics.len();
+        self.convert_for_assignment_const(from, to, value.span(), constant);
+        if self.diagnostics.len() > before
+            && let Some(message) = self.diamond_inference_failure(value, from, to)
+        {
+            self.diagnostics[before].message = message;
+        }
+        if self.diagnostics.len() > before {
+            self.blame_conditional_branches(value, to, before);
+        }
+    }
+
+    /// A reference CONDITIONAL in an assignment or invocation context is a
+    /// poly expression (JLS §15.25.3): each branch is checked against the
+    /// target on its own, and javac blames every branch that does not fit —
+    /// "bad type in conditional expression", caret on the branch — rather
+    /// than the join caturra had to pick. Replaces the diagnostic at `at`.
+    fn blame_conditional_branches(&mut self, value: &Expr, to: JType, at: usize) {
+        let blames = self.conditional_blame(value, to);
+        let Some(((first_span, first), rest)) = blames.split_first() else {
+            return;
+        };
+        let Some(reported) = self.diagnostics.get_mut(at) else {
+            return;
+        };
+        if !reported.message.starts_with("incompatible types: ") {
+            return;
+        }
+        reported.message.clone_from(first);
+        reported.span = Some(*first_span);
+        for (offset, (span, message)) in rest.iter().enumerate() {
+            let mut extra = self.diagnostics[at].clone();
+            extra.message.clone_from(message);
+            extra.span = Some(*span);
+            self.diagnostics.insert(at + 1 + offset, extra);
+        }
+    }
+
+    /// Each branch of a reference conditional that cannot reach `to`, with
+    /// javac's message for it. Empty when `value` is not such a conditional.
+    fn conditional_blame(&mut self, value: &Expr, to: JType) -> Vec<(SourceSpan, String)> {
+        let Expr::Ternary { then, els, .. } = value else {
+            return Vec::new();
+        };
+        if !to.is_reference() || to == JType::Error {
+            return Vec::new();
+        }
+        let mut blames = Vec::new();
+        for branch in [then.as_ref(), els.as_ref()] {
+            if matches!(branch, Expr::Ternary { .. }) {
+                blames.extend(self.conditional_blame(branch, to));
+                continue;
+            }
+            if self.branch_reaches(branch, to) {
+                continue;
+            }
+            let ty = self.type_of(branch);
+            if ty == JType::Error {
+                continue;
+            }
+            // A primitive branch BOXES to reach a wrapper target.
+            if boxable_primitive(ty).is_some_and(|elem| widens(JType::Boxed(elem), to, self.table))
+            {
+                continue;
+            }
+            blames.push((
+                branch.span(),
+                format!(
+                    "incompatible types: bad type in conditional expression\n    {} cannot be \
+                     converted to {}",
+                    source_type_name(&ty.describe(self.table)),
+                    source_type_name(&to.describe(self.table))
+                ),
+            ));
+        }
+        blames
+    }
+
+    fn diamond_inference_failure(&self, value: &Expr, from: JType, to: JType) -> Option<String> {
+        let Expr::NewObject {
+            type_args,
+            raw: false,
+            ..
+        } = value
+        else {
+            return None;
+        };
+        let (
+            JType::Generic { class, arg, rest },
+            JType::Generic {
+                class: to_class,
+                arg: to_arg,
+                rest: to_rest,
+            },
+        ) = (from, to)
+        else {
+            return None;
+        };
+        if !type_args.is_empty() || class != to_class {
+            return None;
+        }
+        let info = self.table.info_by_id(class)?;
+        let described = |elem: ElemType| {
+            let ty = elem_value_type(elem, self.table);
+            source_type_name(
+                &boxable_primitive(ty)
+                    .map_or(ty, JType::Boxed)
+                    .describe(self.table),
+            )
+        };
+        // The FIRST variable whose inferred argument is not the target's is
+        // the one javac names.
+        let (index, name) = info.type_param_names.iter().enumerate().find(|(index, _)| {
+            let at = u8::try_from(*index).unwrap_or(u8::MAX);
+            self.table.type_arg(arg, rest, at) != self.table.type_arg(to_arg, to_rest, at)
+        })?;
+        let at = u8::try_from(index).ok()?;
+        let found = self.table.type_arg(arg, rest, at)?;
+        let wanted = self.table.type_arg(to_arg, to_rest, at)?;
+        let owner = source_type_name(&JType::Object(class).describe(self.table));
+        // A BOUNDED variable's constraints fold its bound in (`T extends
+        // Comparable<T>` adds `Integer` to the equality constraints), which
+        // this does not model: the headline alone, rather than detail that
+        // is wrong.
+        if info.type_param_bounds.get(index).is_none_or(Option::is_some) {
+            return Some(format!(
+                "incompatible types: cannot infer type arguments for {owner}<>"
+            ));
+        }
+        let mut message = format!(
+            "incompatible types: cannot infer type arguments for {owner}<>\n    reason: \
+             inference variable {name} has incompatible bounds\n      equality \
+             constraints: {}\n      lower bounds: {}",
+            described(wanted),
+            described(found)
+        );
+        let _ = write!(
+            message,
+            "\n  where {name} is a type-variable:\n    {name} extends Object declared in class \
+             {owner}"
+        );
+        Some(message)
     }
 
     /// Like [`Self::convert_for_assignment`], but aware of the JLS

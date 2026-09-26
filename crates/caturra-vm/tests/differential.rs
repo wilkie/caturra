@@ -36408,27 +36408,73 @@ public class EmptyOverload {
 "#
 );
 
-stricter_than_javac!(
-    stricter_local_class_in_a_switch_arm,
+// A local class declared in a switch ARM. Unlike a local variable, its scope
+// is the rest of its switch block statement GROUP (JLS 6.3): a later arm may
+// declare its own class of the same name, and an effectively-final local
+// from outside the switch is captured as in any block.
+differential_test!(
+    a_local_class_in_a_switch_arm,
     "SwitchLocalClass",
-    r"
+    r#"
 public class SwitchLocalClass {
+    public static void main(String[] args) {
+        String tag = "t";
+        for (int n = 0; n < 3; n++) {
+            switch (n) {
+                case 0:
+                    class Helper {
+                        int value() {
+                            return 7;
+                        }
+                        public String toString() {
+                            return tag + value();
+                        }
+                    }
+                    System.out.println(new Helper().value() + " " + new Helper());
+                    break;
+                case 1:
+                    class Helper2 {
+                    }
+                    class Helper {
+                        public String toString() {
+                            return "second " + new Helper2().getClass().getSimpleName();
+                        }
+                    }
+                    System.out.println(new Helper() + " " + Helper.class.getName());
+                    break;
+                default:
+                    int k = n * 10;
+                    class Other {
+                        String s() {
+                            return "other " + k;
+                        }
+                    }
+                    System.out.println(new Other().s() + " " + new Other().getClass().getName());
+            }
+        }
+    }
+}
+"#
+);
+
+// ...and a LATER arm does not see it: `cannot find symbol`, as javac says.
+differential_wording!(
+    a_switch_arm_local_class_is_not_seen_by_a_later_arm,
+    "SwitchLocalScope",
+    r#"
+public class SwitchLocalScope {
     public static void main(String[] args) {
         switch (args.length) {
             case 0:
                 class Helper {
-                    int value() {
-                        return 7;
-                    }
                 }
-                System.out.println(new Helper().value());
                 break;
             default:
-                break;
+                System.out.println(new Helper());
         }
     }
 }
-"
+"#
 );
 
 // `count++` on a field of the ENCLOSING class, from inside a lambda or an
@@ -40594,10 +40640,74 @@ public class Switching {
 "#
 );
 
-stricter_than_javac!(
-    stricter_a_conditional_as_an_argument_needs_one_shared_type,
-    "StrictConditionalArg",
-    "public class StrictConditionalArg {\n  interface Shape {}\n  interface Drawable {}\n  static class Sq implements Shape, Drawable {}\n  static class Ci implements Shape, Drawable {}\n  static String d(Drawable x) { return \"d\"; }\n  static String r() { return d(true ? new Sq() : new Ci()); }\n}"
+// A reference CONDITIONAL passed as an argument is a poly expression: it fits
+// every overload whose parameter each BRANCH reaches, not only the one its
+// join names. Two classes sharing `Shape` AND `Drawable` joined at `Shape`, so
+// `d(Drawable)` was refused and `obj(Object)` beat `obj(Drawable)`.
+differential_test!(
+    a_conditional_argument_fits_each_overload_it_reaches,
+    "ConditionalArgument",
+    r#"
+public class ConditionalArgument {
+    interface Shape {}
+    interface Drawable {}
+    static class Sq implements Shape, Drawable { public String toString() { return "sq"; } }
+    static class Ci implements Shape, Drawable { public String toString() { return "ci"; } }
+    static String d(Drawable x) { return "d" + x; }
+    static String s(Shape x) { return "s" + x; }
+    static String obj(Object x) { return "o" + x; }
+    static String obj(Drawable x) { return "od" + x; }
+    String inst(Shape x) { return "is" + x; }
+    String inst(Object x) { return "io" + x; }
+    public static void main(String[] args) {
+        for (int n = 0; n < 3; n++) {
+            System.out.println(d(n == 0 ? new Sq() : new Ci()) + " " + s(n == 0 ? new Sq() : new Ci()));
+            System.out.println(obj(n == 1 ? new Sq() : new Ci()) + " " + obj(n == 0 ? "s" : "t"));
+            System.out.println(new ConditionalArgument().inst(n == 2 ? new Sq() : new Ci()));
+            System.out.println(d(n == 0 ? new Sq() : n == 1 ? new Ci() : null));
+        }
+    }
+}
+"#
+);
+
+// ...so where two overloads each take one of the shared interfaces, neither
+// is more specific: javac's ambiguity, with its two lines.
+differential_wording!(
+    a_conditional_argument_can_be_ambiguous,
+    "ConditionalAmbiguous",
+    r#"
+public class ConditionalAmbiguous {
+    interface Shape {}
+    interface Drawable {}
+    static class Sq implements Shape, Drawable {}
+    static class Ci implements Shape, Drawable {}
+    static String both(Drawable x) { return "d"; }
+    static String both(Shape x) { return "s"; }
+    public static void main(String[] args) {
+        System.out.println(both(args.length == 0 ? new Sq() : new Ci()));
+    }
+}
+"#
+);
+
+// A branch that reaches no target is javac's "bad type in conditional
+// expression", caret on that branch — in an assignment and an argument alike.
+differential_wording!(
+    a_conditional_branch_that_fits_nothing,
+    "ConditionalBadBranch",
+    r#"
+public class ConditionalBadBranch {
+    interface Shape {}
+    interface Drawable {}
+    static class Sq implements Shape, Drawable {}
+    static class Other implements Shape {}
+    static String d(Drawable x) { return "d"; }
+    public static void main(String[] args) {
+        System.out.println(d(args.length == 0 ? new Sq() : new Other()));
+    }
+}
+"#
 );
 
 // The enum-keyed collections. An `EnumMap` and an `EnumSet` iterate in their
@@ -49453,18 +49563,159 @@ public class StrictExtendMap {\n\
   }\n}"
 );
 
-stricter_than_javac!(
-    stricter_a_diamond_with_two_arguments,
-    "StrictTwoArgDiamond",
-    "public class StrictTwoArgDiamond {\n\
-  static class Pair<A, B> {\n\
-    A a; B b;\n\
-    Pair(A a, B b) { this.a = a; this.b = b; }\n\
-    A first() { return a; }\n\
-  }\n\
-  public static void main(String[] args) {\n\
-    System.out.println(new Pair<>(\"ab\", 2).first().length());\n\
-  }\n}"
+// A DIAMOND of a class with two type variables infers BOTH from the
+// constructor's arguments: inline, nested, in a list, under `var`, from a
+// `null` (which pins nothing — that variable is `Object`), and adopting a
+// wider target one argument at a time.
+differential_test!(
+    a_diamond_with_two_arguments,
+    "TwoArgDiamond",
+    r#"
+import java.util.*;
+public class TwoArgDiamond {
+  static class Pair<A, B> {
+    A a; B b;
+    Pair(A a, B b) { this.a = a; this.b = b; }
+    A first() { return a; }
+    B second() { return b; }
+    public String toString() { return "(" + a + ", " + b + ")"; }
+  }
+  static class Tagged<T, L> {
+    List<T> items; L label;
+    Tagged(List<T> items, L label) { this.items = items; this.label = label; }
+  }
+  public static void main(String[] args) {
+    System.out.println(new Pair<>(new Pair<>(1, "xyz"), 2.5).first().second().length());
+    System.out.println(new Pair<String, Integer>("a", 4).second() * 2);
+    List<Pair<String, Integer>> ps = new ArrayList<>();
+    ps.add(new Pair<>("q", 9));
+    ps.add(new Pair<>("rr", 1));
+    ps.sort(Comparator.comparing(p -> p.second()));
+    System.out.println(ps);
+    int total = 0;
+    for (Pair<String, Integer> p : ps) total += p.first().length() + p.second();
+    System.out.println(total);
+    var v = new Pair<>('c', true);
+    System.out.println(v.second() ? v.first() + 1 : 0);
+    System.out.println(new Tagged<>(List.of(3, 4), "L").items.get(1) + new Tagged<>(List.of(3, 4), "L").label.length());
+    Pair<Object, Number> wide = new Pair<>("s", 3);
+    System.out.println(wide.first() + " " + wide.second().doubleValue());
+    System.out.println(new Pair<>(null, 2).second() + 1);
+    Object o = new Pair<>("a", 1).first();
+    System.out.println(o);
+  }
+}
+"#
+);
+
+// A RAW `new Box(2)` is not a diamond: its type is the raw class, which any
+// parameterization accepts (an unchecked warning). caturra inferred it as a
+// diamond, so `Box<String> b = new Box(2);` was refused.
+differential_test!(
+    a_raw_creation_is_not_inferred,
+    "RawCreation",
+    r#"
+import java.util.*;
+public class RawCreation {
+  static class Pair<A, B> {
+    A a; B b;
+    Pair(A a, B b) { this.a = a; this.b = b; }
+    A first() { return a; }
+  }
+  static class Box<A> {
+    A a;
+    Box(A a) { this.a = a; }
+    A get() { return a; }
+  }
+  public static void main(String[] args) {
+    Pair<String, String> p = new Pair("a", 2);
+    Box<String> b = new Box(2);
+    System.out.println(new Box(2).a.getClass() + " ok");
+    Object o = new Box("s").get();
+    System.out.println(o);
+    List<Box<Integer>> boxes = new ArrayList<>();
+    boxes.add(new Box(5));
+    System.out.println(boxes.get(0).get() + 1);
+    Box<Integer> d = new Box<>(3);
+    System.out.println(d.get() * 2);
+  }
+}
+"#
+);
+
+// ...and a raw `new`'s methods answer the ERASURE, so this is javac's
+// `cannot find symbol` — the inference made it compile.
+differential_wording!(
+    a_raw_creation_answers_the_erasure,
+    "RawErasure",
+    r#"
+public class RawErasure {
+  static class Box<A> {
+    A a;
+    Box(A a) { this.a = a; }
+    A get() { return a; }
+  }
+  public static void main(String[] args) {
+    System.out.println(new Box("s").get().length());
+  }
+}
+"#
+);
+
+// A diamond that cannot take its target's arguments is an INFERENCE failure,
+// in javac's words, naming the variable — in an assignment, a return and an
+// argument alike.
+differential_wording!(
+    a_diamond_that_cannot_be_inferred,
+    "DiamondFails",
+    r#"
+public class DiamondFails {
+  static class Pair<A, B> {
+    A a; B b;
+    Pair(A a, B b) { this.a = a; this.b = b; }
+  }
+  public static void main(String[] args) {
+    Pair<String, String> p = new Pair<>("a", 2);
+  }
+}
+"#
+);
+
+differential_wording!(
+    a_diamond_argument_that_cannot_be_inferred,
+    "DiamondArgFails",
+    r#"
+public class DiamondArgFails {
+  static class Pair<A, B> {
+    A a; B b;
+    Pair(A a, B b) { this.a = a; this.b = b; }
+  }
+  static void take(Pair<String, String> p) {}
+  public static void main(String[] args) {
+    take(new Pair<>("a", 2));
+  }
+}
+"#
+);
+
+// Every type argument of one class is invariant, not only the first:
+// `Pair<String, Integer>` is no `Pair<String, String>`. The second was never
+// compared, so this compiled.
+differential_wording!(
+    a_second_type_argument_is_invariant,
+    "SecondInvariant",
+    r#"
+public class SecondInvariant {
+  static class Pair<A, B> {
+    A a; B b;
+    Pair(A a, B b) { this.a = a; this.b = b; }
+  }
+  public static void main(String[] args) {
+    Pair<String, Integer> q = new Pair<String, Integer>("a", 2);
+    Pair<String, String> r = q;
+  }
+}
+"#
 );
 
 stricter_than_javac!(
@@ -62495,7 +62746,10 @@ public class C1 {
         for (Future<String> x : single.invokeAll(tasks)) System.out.print(x.get());
         System.out.println();
         System.out.println(single.invokeAny(tasks));
-        System.out.println(single.shutdownNow());
+        // invokeAny's cancelled loser can still sit in a JDK's queue when
+        // shutdownNow drains it (a race in the JDK itself), so drain first.
+        single.shutdown();
+        System.out.println(single.awaitTermination(1, TimeUnit.SECONDS) + " " + single.shutdownNow());
         ExecutorService cached = Executors.newCachedThreadPool();
         cached.submit(() -> System.out.println("cached " + Thread.currentThread().getName())).get();
         cached.shutdown();

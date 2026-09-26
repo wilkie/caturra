@@ -715,6 +715,11 @@ pub enum Expr {
         /// (`outer.new Inner()`); `None` for an ordinary `new`. A pass binds it
         /// as the inner class's synthetic enclosing reference.
         outer: Option<Box<Expr>>,
+        /// Written with no `<…>` at all (`new Box(2)`): a RAW creation, whose
+        /// type is the raw class. A diamond infers its arguments from the
+        /// constructor's; a raw `new` does not (JLS §15.9.1). Every `new` a
+        /// pass synthesizes is `false`, and infers as it always did.
+        raw: bool,
         span: SourceSpan,
     },
     /// `expr instanceof Type`.

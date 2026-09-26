@@ -2701,6 +2701,14 @@ impl Parser<'_> {
         self.expect_symbol("{", "to open the switch body")?;
 
         let mut arms: Vec<SwitchArm> = Vec::new();
+        // Local classes declared in an arm: (arm, index in its body, classes
+        // hoisted before it, source name, hoisted decl). Unlike a local
+        // VARIABLE, a local class in a switch block statement group is
+        // scoped to the rest of that GROUP only (JLS 6.3) — a later arm does
+        // not see it, and may declare its own class of the same name.
+        let mut locals: Vec<(usize, usize, usize, String, ClassDecl)> = Vec::new();
+        // How many classes had been hoisted when each arm ended.
+        let mut arm_hoist_end: Vec<usize> = Vec::new();
         while !self.at_symbol("}") && self.peek().is_some() {
             // One arm: stacked labels, then statements.
             let arm_start = self.here();
@@ -2727,6 +2735,23 @@ impl Parser<'_> {
                 && !self.at_keyword(Keyword::Default)
                 && self.peek().is_some()
             {
+                if self.at_local_class_start() {
+                    match self.local_class_decl() {
+                        Ok((name, decl)) => {
+                            if locals.iter().any(|(arm, _, _, seen, _)| {
+                                *arm == arms.len() && *seen == name
+                            }) {
+                                self.error_at(
+                                    decl.span,
+                                    format!("class {name} is already defined in this block"),
+                                );
+                            }
+                            locals.push((arms.len(), body.len(), self.anon_classes.len(), name, decl));
+                        }
+                        Err(Abort) => self.recover_to_statement_boundary(),
+                    }
+                    continue;
+                }
                 let started = self.pos;
                 match self.statement() {
                     Ok(Some(stmt)) => body.push(stmt),
@@ -2737,6 +2762,7 @@ impl Parser<'_> {
                     Err(Abort) => self.recover_to_statement_boundary(),
                 }
             }
+            arm_hoist_end.push(self.anon_classes.len());
             arms.push(SwitchArm {
                 labels,
                 body,
@@ -2747,6 +2773,24 @@ impl Parser<'_> {
             });
         }
         self.expect_symbol("}", "to close the switch body")?;
+        // Rewrite each local class's name through the rest of its own arm —
+        // its statements, the arm's later local classes and whatever was
+        // hoisted from them — then hoist it, exactly as a block does.
+        for k in 0..locals.len() {
+            let (arm, at, hoisted_from) = (locals[k].0, locals[k].1, locals[k].2);
+            let (name, mangled) = (locals[k].3.clone(), locals[k].4.name.clone());
+            rename_class_in_stmts(&mut arms[arm].body[at..], &name, &mangled);
+            let hoisted_to = arm_hoist_end[arm];
+            for later in locals[k..].iter_mut().take_while(|later| later.0 == arm) {
+                rename_class_in_class(&mut later.4, &name, &mangled);
+            }
+            for hoisted in &mut self.anon_classes[hoisted_from..hoisted_to] {
+                rename_class_in_class(hoisted, &name, &mangled);
+            }
+        }
+        for (.., decl) in locals {
+            self.anon_classes.push(decl);
+        }
         Ok(Stmt::Switch {
             selector,
             arms,
@@ -4098,6 +4142,7 @@ impl Parser<'_> {
                 if self.eat_keyword(Keyword::New) {
                     let start = expr.span().start;
                     let (name, _) = self.expect_ident("for the inner class after '.new'")?;
+                    let raw = !self.at_symbol("<");
                     self.skip_type_args();
                     let args = self.arguments()?;
                     let span = SourceSpan {
@@ -4109,6 +4154,7 @@ impl Parser<'_> {
                         type_args: Vec::new(),
                         args,
                         outer: Some(Box::new(expr)),
+                        raw,
                         span,
                     };
                     continue;
@@ -4290,6 +4336,7 @@ impl Parser<'_> {
             // into a synthesized constructor that calls super(...).
             args,
             outer: None,
+            raw: false,
             span,
         })
     }
@@ -4468,6 +4515,9 @@ impl Parser<'_> {
         // The arguments themselves flatten to `Object` here, so the
         // distinction has to be kept beside them.
         let mut all_unbounded = true;
+        // No `<…>` at all: a RAW creation, which is not a diamond — javac
+        // infers nothing for `new Box(2)`, and its type is the raw `Box`.
+        let raw = !self.at_symbol("<");
         if matches!(base, TypeRef::Named(_)) && self.at_symbol("<") {
             self.pos += 1;
             if !self.at_symbol(">") {
@@ -4515,6 +4565,7 @@ impl Parser<'_> {
                 type_args,
                 args,
                 outer: None,
+                raw,
                 span,
             });
         }
@@ -4956,6 +5007,7 @@ fn desugar_enum(
                 type_args: Vec::new(),
                 args: ctor_args,
                 outer: None,
+                raw: false,
                 span: constant.span,
             }),
             order: index,
@@ -5272,6 +5324,7 @@ fn desugar_enum(
                     type_args: Vec::new(),
                     args: vec![lit_str("Name is null")],
                     outer: None,
+                    raw: false,
                     span: zero,
                 },
                 span: zero,
@@ -5290,6 +5343,7 @@ fn desugar_enum(
                     span: zero,
                 }],
                 outer: None,
+                raw: false,
                 span: zero,
             },
             span: zero,

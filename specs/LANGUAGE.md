@@ -587,12 +587,14 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     compiles and is readable as `C.F`.
   - `getSimpleName()` on a local class is the name the source wrote, not
     caturra's hoisted `Name$LocalN`.
-  - **Three left open**, all about a local class's DECLARATION-POINT scope:
+  - **Two left open**, both about a local class's DECLARATION-POINT scope:
     a local class may still reference a local declared after it (caturra
-    computes captures at the `new` site, not at the declaration), a local
-    class inside a `switch` case is refused (local classes are hoisted from
-    block bodies, and a switch arm is not one), and a local class nested
-    inside another cannot capture the outer method's locals.
+    computes captures at the `new` site, not at the declaration), and a local
+    class nested inside another cannot capture the outer method's locals.
+    A local class inside a `switch` arm (once refused: the arm parser read
+    statements only) is hoisted like a block's, its name rewritten from its
+    declaration to the end of the switch — later arms included, since the
+    switch block is one scope (`a_local_class_in_a_switch_arm`).
   - Pinned by `diff_qualified_this_in_nested_classes`,
     `diff_local_class_shapes`, `diff_initializer_scope` and five `reject_*`
     tests.
@@ -9131,21 +9133,6 @@ counting catches: a divergence that stopped being one.
   one `var` gets) was tried and is worse — the element is then CHECKED, and
   `list.addAll(Collections.emptyList())` becomes a type error. The lenient
   typing stays. (`stricter_a_context_free_factory_in_an_overload_set`)
-- A conditional over two classes that share SEVERAL interfaces, passed as an
-  ARGUMENT: `d(flag ? new Sq() : new Ci())` where `Sq` and `Ci` implement both
-  `Shape` and `Drawable` and `d` takes a `Drawable`. javac's type for a
-  conditional is the INTERSECTION of everything both branches share (JLS
-  §15.25); caturra's join has to pick ONE, and the conditional ADOPTS its
-  target wherever the target is known — a declaration, an assignment, a return,
-  an array store, a field initializer, through a nested conditional. An
-  ARGUMENT is the position where it is not: the type is needed to CHOOSE the
-  overload, before any parameter is known.
-  (`stricter_a_conditional_as_an_argument_needs_one_shared_type`)
-- A local class declared inside a SWITCH arm
-  (`case 0: class Helper { … }`). The switch block is one scope and its arms
-  hold block statements like any other block, but the arm parser reads
-  STATEMENTS only, and a class declaration is not one. Every other block
-  position takes it. (`stricter_local_class_in_a_switch_arm`)
 - A method whose bytecode outgrows a 16-bit branch offset — `code too large`,
   javac's own wording, at about half the size javac allows. A class file's
   branches are signed 16-bit, and caturra reaches that before the 64K limit on
@@ -9175,13 +9162,6 @@ counting catches: a divergence that stopped being one.
   refusal says exactly that rather than pretending the name is unknown. Every
   other way of holding one (a field, a wrapper, composition) works.
   (`stricter_extending_a_builtin_collection`)
-- A DIAMOND of a class with more than one type parameter, used inline:
-  `new Pair<>("ab", 2).first().length()`. The plan behind diamond inference
-  joins its sources into a single answer, so a second variable has nowhere to
-  go and the whole thing reads raw. Writing the arguments out
-  (`new Pair<String, Integer>(…)`) or assigning to a declared variable first —
-  which is how a pair is nearly always used — compiles in both.
-  (`stricter_a_diamond_with_two_arguments`)
 - A factory INSIDE a factory: `List<List<Number>> rows = List.of(List.of(1));`
   and `Map<String, List<Number>> named = Map.of("k", List.of(1));`. A poly
   expression takes its type argument from the target, and the rule does not
@@ -10162,13 +10142,13 @@ initializer, a builtin parameter, and recursively through a NESTED conditional
 (whose own join is the one type the intersection had to give up). The same
 shape a DIAMOND already had, for the same reason.
 
-An ARGUMENT to a user method is the one position left, and it is left
-deliberately: the argument's type is what CHOOSES the overload, so there is no
-parameter to adopt yet. It is written down under **Divergences from javac**.
+An ARGUMENT to a user method was the one position left, since the argument's
+type is what CHOOSES the overload. It was closed on 2026-09-26 (see "A diamond
+of two, and a `new` with no brackets"): a conditional argument fits every
+overload whose parameter each branch reaches.
 
 Pinned by `the_type_of_a_conditional`, `a_conditional_adopts_its_target`,
-`what_a_switch_does` and
-`stricter_a_conditional_as_an_argument_needs_one_shared_type`; the
+`what_a_switch_does` and `a_conditional_argument_fits_each_overload_it_reaches`; the
 compatibility page gained a "The type of a conditional" claim (91 supported /
 5 unsupported / 3 beyond-11).
 
@@ -15878,6 +15858,65 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `a_class_that_extends_number`, `string_value_of_a_type_variable`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
+
+### A diamond of two, and a `new` with no brackets (2026-09-26)
+
+Closing two `stricter_` pins that were ordinary Java a student writes:
+
+- **A local class in a `switch` arm.** The arm parser read statements only,
+  and a class declaration is not one. It is hoisted now exactly as a block's
+  is. Its scope was worth capturing before building: unlike a local VARIABLE,
+  a local class in a switch block statement group is scoped to the rest of
+  that GROUP (JLS 6.3) — javac says `cannot find symbol` for it in a later
+  arm, and a later arm may declare its own class of the same name.
+- **A diamond of a class with two type variables** — `new Pair<>("ab",
+  2).first().length()` — infers both. The constructor's plan carries a
+  `second` source list (the one a two-variable method return already had),
+  and a `new` of a user class now carries every argument, not only the first.
+  A `null` argument pins nothing, so `new Pair<>(null, 2)` is a
+  `Pair<Object, Integer>`; a wider target is adopted one argument at a time
+  (`Pair<Object, Number> p = new Pair<>("s", 3)`).
+
+The second one surfaced three things that were wrong before it:
+
+- **Only the FIRST type argument of a class was compared.** `Pair<String,
+  Integer>` assigned to `Pair<String, String>`. Every argument of one class is
+  invariant; a side that never learned its later arguments is still not held
+  to them.
+- **A raw `new Box(2)` was inferred as if it were a diamond.** The AST could
+  not tell `new Box(2)` from `new Box<>(2)`, so `Box<String> b = new
+  Box(2);` — legal, with an unchecked warning — was refused, and `new
+  Box("s").get().length()` — `cannot find symbol` in javac, since a raw
+  type's methods answer the erasure — compiled. `Expr::NewObject::raw` says
+  which was written; everything a pass synthesizes is not raw.
+- **A diamond that cannot take its target** is an inference failure in javac's
+  words: `cannot infer type arguments for Pair<>`, the variable, its equality
+  constraint and lower bound — in an assignment, a return and an argument. (For
+  a BOUNDED variable javac folds the bound into the constraints; there only
+  the headline is given.)
+
+A third `stricter_` pin went the same way — **a conditional as an ARGUMENT**.
+`d(flag ? new Sq() : new Ci())`, with both classes implementing `Shape` and
+`Drawable` and `d` taking a `Drawable`, was refused: the join had to pick one
+interface and picked `Shape`. A reference conditional in an invocation context
+is a POLY expression (JLS §15.25.3), so overload resolution now asks whether
+each BRANCH reaches a parameter, not the join. That also settles which
+overload wins — `both(Drawable)` against `both(Shape)` is javac's "reference to
+both is ambiguous", and `obj(Drawable)` beats `obj(Object)` where the join had
+chosen `Object` — and a branch that fits nothing is javac's "bad type in
+conditional expression", once per bad branch with the caret on it, in an
+assignment as much as an argument. The ambiguity message itself now has
+javac's two lines, each method named with the class that declares it.
+
+Pinned as `a_local_class_in_a_switch_arm`,
+`a_switch_arm_local_class_is_not_seen_by_a_later_arm`,
+`a_conditional_argument_fits_each_overload_it_reaches`,
+`a_conditional_argument_can_be_ambiguous`,
+`a_conditional_branch_that_fits_nothing`,
+`a_diamond_with_two_arguments`, `a_raw_creation_is_not_inferred`,
+`a_raw_creation_answers_the_erasure`, `a_diamond_that_cannot_be_inferred`,
+`a_diamond_argument_that_cannot_be_inferred` and
+`a_second_type_argument_is_invariant`.
 
 ### Where a syntax fuzz still disagreed (2026-09-26)
 
