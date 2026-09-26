@@ -3883,11 +3883,7 @@ impl MethodTable {
                 // program can tell them apart (`ArrayList<String> a = aList;`
                 // needs a cast). Read here because this is the one place that
                 // still has the written name.
-                let face = if matches!(simple, "List" | "Set" | "Map") {
-                    CollFace::Iface
-                } else {
-                    CollFace::Concrete
-                };
+                let face = CollFace::written(simple);
                 // `List<E>` is the interface form of the ArrayList caturra
                 // models, an `EnumMap` is a `HashMap` that iterates in the
                 // constants' order, and so on — one table, asked here and by
@@ -6198,15 +6194,19 @@ fn faced_class(ty: JType) -> Option<&'static str> {
     Some(match ty {
         JType::List { face, .. } => match face {
             CollFace::Iface => "java/util/List",
-            CollFace::Concrete => "java/util/ArrayList",
+            CollFace::Concrete | CollFace::Linked | CollFace::Enum => "java/util/ArrayList",
         },
         JType::Set { face, .. } => match face {
             CollFace::Iface => "java/util/Set",
             CollFace::Concrete => "java/util/HashSet",
+            CollFace::Linked => "java/util/LinkedHashSet",
+            CollFace::Enum => "java/util/EnumSet",
         },
         JType::Map { face, .. } => match face {
             CollFace::Iface => "java/util/Map",
             CollFace::Concrete => "java/util/HashMap",
+            CollFace::Linked => "java/util/LinkedHashMap",
+            CollFace::Enum => "java/util/EnumMap",
         },
         // The sorted families have three faces each rather than two, and they
         // are named the same way: an array of one calls itself what was
@@ -8062,12 +8062,59 @@ fn join_sources(
         match joined {
             None => joined = Some(reference),
             Some(prev) if prev == reference => {}
+            // Two faces of one collection — a `LinkedHashMap` and a `HashMap`
+            // — join at the face both are.
+            Some(prev) if face_join(prev, reference).is_some() => {
+                joined = face_join(prev, reference);
+            }
             // The arguments pin different types; their least upper bound is
             // wider than either, so keep the erased return.
             Some(_) => return None,
         }
     }
     joined
+}
+
+/// Two faces of the SAME collection type joined at the face both are: a
+/// `LinkedHashMap` and a `HashMap` are a `HashMap`, an `EnumMap` and a
+/// `HashMap` only a `Map`. `None` for anything else.
+fn face_join(left: JType, right: JType) -> Option<JType> {
+    let meet = |a: CollFace, b: CollFace| {
+        if a.widens_to(b) {
+            b
+        } else if b.widens_to(a) {
+            a
+        } else {
+            CollFace::Iface
+        }
+    };
+    match (left, right) {
+        (
+            JType::Map { key, value, face: a },
+            JType::Map {
+                key: k2,
+                value: v2,
+                face: b,
+            },
+        ) if key == k2 && value == v2 => Some(JType::Map {
+            key,
+            value,
+            face: meet(a, b),
+        }),
+        (JType::Set { elem, face: a }, JType::Set { elem: e2, face: b }) if elem == e2 => {
+            Some(JType::Set {
+                elem,
+                face: meet(a, b),
+            })
+        }
+        (JType::List { elem, face: a }, JType::List { elem: e2, face: b }) if elem == e2 => {
+            Some(JType::List {
+                elem,
+                face: meet(a, b),
+            })
+        }
+        _ => None,
+    }
 }
 
 fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) -> Option<JType> {
@@ -9424,6 +9471,12 @@ enum CollFace {
     Iface,
     /// `ArrayList` / `HashSet` / `HashMap` — the class a `new` makes.
     Concrete,
+    /// `LinkedHashSet` / `LinkedHashMap` — a SUBCLASS of the concrete one:
+    /// assignable to a `HashMap`, and a `HashMap` is not assignable to it.
+    Linked,
+    /// `EnumSet` / `EnumMap` — a class of its own beside the concrete one
+    /// (both are `Set`/`Map`s, neither is the other).
+    Enum,
 }
 
 /// Which of the two builders a [`JType::StringBuilder`] is. A `StringBuffer`
@@ -9539,14 +9592,29 @@ impl CollFace {
     /// Whether a value of this face may be used where `other` is wanted: a
     /// class widens to its interface, never the other way round.
     fn widens_to(self, other: CollFace) -> bool {
-        self == other || (self == CollFace::Concrete && other == CollFace::Iface)
+        self == other
+            || other == CollFace::Iface
+            || (self == CollFace::Linked && other == CollFace::Concrete)
+    }
+
+    /// The face a collection type NAMES — which of the classes one storage
+    /// stands for was written. Every place that reads a written name asks
+    /// this: `LinkedHashMap<K, V> m = new HashMap<>()` compiled while every
+    /// concrete class was the same face, and javac refuses it.
+    fn written(simple: &str) -> CollFace {
+        match simple {
+            "List" | "Set" | "Map" => CollFace::Iface,
+            "LinkedHashMap" | "LinkedHashSet" => CollFace::Linked,
+            "EnumMap" | "EnumSet" => CollFace::Enum,
+            _ => CollFace::Concrete,
+        }
     }
 
     /// The name a DIAGNOSTIC gives this face of a list.
     fn list_name(self) -> &'static str {
         match self {
             CollFace::Iface => "List",
-            CollFace::Concrete => "ArrayList",
+            CollFace::Concrete | CollFace::Linked | CollFace::Enum => "ArrayList",
         }
     }
 
@@ -9555,6 +9623,8 @@ impl CollFace {
         match self {
             CollFace::Iface => "Set",
             CollFace::Concrete => "HashSet",
+            CollFace::Linked => "LinkedHashSet",
+            CollFace::Enum => "EnumSet",
         }
     }
 
@@ -9563,6 +9633,8 @@ impl CollFace {
         match self {
             CollFace::Iface => "Map",
             CollFace::Concrete => "HashMap",
+            CollFace::Linked => "LinkedHashMap",
+            CollFace::Enum => "EnumMap",
         }
     }
 }
@@ -31553,20 +31625,20 @@ impl BodyGen<'_> {
                 JType::Map {
                     key: key.unwrap_or_else(|| self.diamond_elem()),
                     value: value.unwrap_or_else(|| self.diamond_elem()),
-                    face: CollFace::Concrete,
+                    face: CollFace::written(simple),
                 }
             }
             "HashSet" | "Set" | "LinkedHashSet" => match type_args {
                 [arg] => JType::Set {
                     elem: elem_from_type_arg(arg, self.table)
                         .unwrap_or_else(|| self.diamond_elem()),
-                    face: CollFace::Concrete,
+                    face: CollFace::written(simple),
                 },
                 _ => JType::Set {
                     elem: self
                         .copy_source_element(args)
                         .unwrap_or_else(|| self.diamond_elem()),
-                    face: CollFace::Concrete,
+                    face: CollFace::written(simple),
                 },
             },
             "LinkedList" => match type_args {
@@ -33751,7 +33823,7 @@ impl BodyGen<'_> {
         JType::Map {
             key,
             value,
-            face: CollFace::Concrete,
+            face: CollFace::written(class.rsplit('/').next().unwrap_or(class)),
         }
     }
 
@@ -34358,15 +34430,14 @@ impl BodyGen<'_> {
             }
             _ => unreachable!("arg count checked above"),
         }
-        // The `new` makes the CLASS, whichever of the three names it wrote.
+        // The `new` makes the CLASS it names — a `LinkedHashSet` is a
+        // `HashSet`, and a `HashSet` is not one.
+        let face = CollFace::written(class.rsplit('/').next().unwrap_or(class));
         match elem {
-            Some(elem) => JType::Set {
-                elem,
-                face: CollFace::Concrete,
-            },
+            Some(elem) => JType::Set { elem, face },
             None => JType::Set {
                 elem: self.diamond_elem(),
-                face: CollFace::Concrete,
+                face,
             },
         }
     }
@@ -35075,7 +35146,7 @@ impl BodyGen<'_> {
                 };
                 Some(JType::Set {
                     elem,
-                    face: CollFace::Concrete,
+                    face: CollFace::Enum,
                 })
             }
             // `copyOf(c)` takes its element from the SOURCE, not from reading
@@ -36854,7 +36925,7 @@ impl BodyGen<'_> {
         };
         let set = JType::Set {
             elem,
-            face: CollFace::Concrete,
+            face: CollFace::Enum,
         };
         // What the call selects from it.
         let descriptor = match (method, args.len()) {
@@ -45385,11 +45456,11 @@ impl BodyGen<'_> {
                 ..
             }
             | JType::Set {
-                face: CollFace::Concrete,
+                face: CollFace::Concrete | CollFace::Linked | CollFace::Enum,
                 ..
             }
             | JType::Map {
-                face: CollFace::Concrete,
+                face: CollFace::Concrete | CollFace::Linked | CollFace::Enum,
                 ..
             }
             // The same for the collections whose role already records it: a
@@ -46078,6 +46149,17 @@ impl BodyGen<'_> {
     }
 
     fn join_reference_elems(&self, left: ElemType, right: ElemType) -> Option<ElemType> {
+        // Two collections that are faces of one type join at their shared
+        // face — `List.of(aLinkedHashMap, aHashMap)` is a list of `HashMap`s.
+        if let (ElemType::Nested { inner: a, read }, ElemType::Nested { inner: b, .. }) =
+            (left, right)
+            && let Some(joined) = face_join(self.table.nested_type(a), self.table.nested_type(b))
+        {
+            return Some(ElemType::Nested {
+                inner: self.table.intern_nested(joined),
+                read,
+            });
+        }
         // A `String` and a `StringBuilder` share `CharSequence`, which is the
         // element javac gives `Arrays.asList("a", new StringBuilder())` —
         // joining them at `Object` made the list unassignable to the

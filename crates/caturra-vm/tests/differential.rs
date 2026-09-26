@@ -62933,6 +62933,121 @@ interface Call<T> { T call() throws Exception; }
 "#
 );
 
+// Each collection class is its OWN face. caturra kept only two — the
+// interface and "the class" — so every concrete class was the same type:
+// `LinkedHashMap<K, V> m = new HashMap<>()`, an `EnumSet` into a `HashSet`, an
+// `EnumMap` cast to a `HashMap` all compiled, and javac refuses each. A
+// `LinkedHashMap` IS a `HashMap` (and a `LinkedHashSet` a `HashSet`); an
+// `EnumMap`/`EnumSet` is only a `Map`/`Set`. The valid half: every direction
+// that should still compile, the joins (a ternary, `List.of`, a generic
+// method's argument) meeting at the shared face.
+differential_test!(
+    each_collection_class_is_its_own_face,
+    "V1",
+    r#"
+import java.util.*;
+public class V1 {
+    enum D { A, B, C }
+    static int size(HashMap<String, Integer> m) { return m.size(); }
+    static int count(HashSet<String> s) { return s.size(); }
+    static LinkedHashMap<String, Integer> make() { return new LinkedHashMap<>(); }
+    public static void main(String[] args) {
+        HashMap<String, Integer> h = new LinkedHashMap<>();
+        h.put("b", 1); h.put("a", 2);
+        Map<String, Integer> m = new EnumMap<D, Integer>(D.class).isEmpty() ? h : h;
+        LinkedHashMap<String, Integer> l = new LinkedHashMap<>(h);
+        l.put("c", 3);
+        System.out.println(size(l) + " " + size(make()) + " " + l + " " + m);
+        HashSet<String> hs = new LinkedHashSet<>(List.of("z", "y"));
+        LinkedHashSet<String> ls = new LinkedHashSet<>(hs);
+        System.out.println(count(ls) + " " + hs + " " + ls);
+        EnumSet<D> e = EnumSet.of(D.C, D.A);
+        Set<D> es = EnumSet.allOf(D.class);
+        EnumMap<D, String> em = new EnumMap<>(D.class);
+        em.put(D.B, "b");
+        Map<D, String> emv = em;
+        Object o = l;
+        LinkedHashMap<String, Integer> back = (LinkedHashMap<String, Integer>) o;
+        HashMap<String, Integer> asHash = (HashMap<String, Integer>) o;
+        System.out.println(e + " " + es + " " + em + " " + emv + " " + back + " " + asHash + " " + (o instanceof LinkedHashMap) + " " + (o instanceof HashMap));
+        HashMap<String, Integer> pick = args.length > 0 ? l : h;
+        List<LinkedHashMap<String, Integer>> list = new ArrayList<>();
+        list.add(l);
+        HashMap<String, Integer> first = list.get(0);
+        EnumSet<D> copy = EnumSet.copyOf(e);
+        EnumSet<D> none = EnumSet.noneOf(D.class);
+        none.addAll(copy);
+        System.out.println(pick + " " + first + " " + none + " " + EnumSet.complementOf(e) + " " + EnumSet.range(D.A, D.B));
+        LinkedHashMap<String, Integer> lcopy = (LinkedHashMap<String, Integer>) l.clone();
+        System.out.println(lcopy);
+    }
+}
+"#
+);
+
+differential_test!(
+    two_faces_join_at_the_shared_one,
+    "V2",
+    r#"
+import java.util.*;
+public class V2 {
+    enum D { A, B }
+    static <T> T same(T a, T b) { return a; }
+    public static void main(String[] args) {
+        LinkedHashMap<String, Integer> l = new LinkedHashMap<>(Map.of("a", 1));
+        HashMap<String, Integer> h = new HashMap<>(Map.of("b", 2));
+        EnumMap<D, Integer> e = new EnumMap<>(D.class);
+        var j1 = args.length == 0 ? l : h;
+        j1.put("x", 9);
+        HashMap<String, Integer> back = j1;
+        var j2 = args.length == 0 ? new EnumMap<D, String>(D.class) : new HashMap<D, String>();
+        Map<D, String> asMap = j2;
+        var both = List.of(l, h);
+        HashMap<String, Integer> fromList = both.get(1);
+        HashMap<String, Integer> s = same(l, h);
+        var ls = new LinkedHashSet<>(List.of(3, 1));
+        var hs = args.length == 0 ? ls : new HashSet<Integer>();
+        HashSet<Integer> hsBack = hs;
+        System.out.println(back + " " + asMap + " " + fromList + " " + s + " " + hsBack + " " + e);
+    }
+}
+"#
+);
+
+#[test]
+fn a_collection_class_is_not_its_sibling() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    for (index, body) in [
+        r"takeLinked(new HashMap<>());",
+        r"takeEnumSet(new HashSet<D>());",
+        r"LinkedHashSet<String> s = new HashSet<String>();",
+        r"EnumMap<D,Integer> e = new EnumMap<>(D.class); HashMap<D,Integer> h = e;",
+        r"EnumSet<D> e = EnumSet.of(D.A); HashSet<D> h = e;",
+        r"List<LinkedHashMap<String,Integer>> l = new ArrayList<>(); l.add(new HashMap<>());",
+        r"LinkedHashMap<String,Integer> l = (LinkedHashMap<String,Integer>) new TreeMap<String,Integer>();",
+        r"HashSet<String> h = give(); LinkedHashSet<String> back = h;",
+        r"HashMap<D,Integer> h = new HashMap<>(); EnumMap<D,Integer> e = (EnumMap<D,Integer>) h;",
+        r"EnumMap<D,Integer> e = new EnumMap<>(D.class); HashMap<D,Integer> h = (HashMap<D,Integer>) e;",
+        r"HashSet<D> h = new HashSet<>(); EnumSet<D> e = (EnumSet<D>) h;",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let class = format!("Sib{index}");
+        let source = format!(
+            "import java.util.*;\npublic class {class} {{\n    enum D {{ A }}\n    \
+             static void takeLinked(LinkedHashMap<String,Integer> m) {{}}\n    \
+             static void takeEnumSet(EnumSet<D> s) {{}}\n    \
+             static LinkedHashSet<String> give() {{ return new LinkedHashSet<>(); }}\n    \
+             public static void main(String[] a) {{ {body} }}\n}}\n"
+        );
+        assert_both_reject(&class, &source);
+    }
+}
+
 // `join()` declares `InterruptedException`, so an unhandled one is javac's own
 // first error — and a `catch` around it is legal rather than "never thrown in
 // body of corresponding try statement". (When `join` was refused, phase 0,

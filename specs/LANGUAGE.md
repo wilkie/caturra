@@ -15874,6 +15874,24 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### Each collection class is its own face (2026-09-26)
+
+A collection type recorded whether the program wrote the INTERFACE (`Map`) or
+"the class" (`HashMap`) — and every concrete class was the same class. So
+`LinkedHashMap<K, V> m = new HashMap<>()` compiled, an `EnumSet` assigned to a
+`HashSet`, and an `EnumMap` cast to a `HashMap`: all refused by javac, and the
+dangerous direction, since each compiled here and would fail on a JDK. None was
+on the looser-than-javac list, because none had been noticed. `CollFace` gains
+`Linked` (a SUBCLASS of the concrete face: a `LinkedHashMap` is a `HashMap`)
+and `Enum` (beside it: an `EnumMap` is only a `Map`), read from the written
+name in one place (`CollFace::written`); a `new`, the `EnumSet` factories, a
+cast and an array's class all name the face that was written. Two faces met
+without a target — `List.of(aLinkedHashMap, aHashMap)`, a generic method's
+arguments — join at the one both are (`face_join`), where they used to meet at
+`Object`. Pinned as `each_collection_class_is_its_own_face`,
+`two_faces_join_at_the_shared_one` and `a_collection_class_is_not_its_sibling`
+(eleven programs javac refuses).
+
 ### A result pinned through a program's own interface (2026-09-26)
 
 `pool.submit(() -> 20).get() + 1` was "bad operand types … T and int". A
