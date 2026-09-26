@@ -1695,6 +1695,47 @@ pub struct Heap {
     /// 40. A side table, so the `StringBuilder` variant stays a plain
     /// `Vec<u16>` and keeps sharing its or-patterns with `JavaString`.
     builder_capacity: std::collections::HashMap<HeapRef, usize>,
+    /// The WEAKLY CONSISTENT cursors over `ConcurrentHashMap`s, by key: an
+    /// iterator object's reference, or a for-each loop's token (see
+    /// `ChmCursor`).
+    chm_cursors: std::collections::HashMap<u64, ChmCursor>,
+    /// The next for-each token handed out.
+    next_chm_token: i32,
+}
+
+/// A `ConcurrentHashMap` cursor. It never throws
+/// `ConcurrentModificationException`: it holds the node it will return NEXT —
+/// chosen when the last one was returned, as a JDK's `advance()` does — and
+/// follows live links from there, so a node added further along is met, and
+/// one removed after it was chosen is still returned.
+#[derive(Debug, Clone, Copy)]
+pub struct ChmCursor {
+    pub map: HeapRef,
+    /// The next node and the bin it was in.
+    pub next: Option<(u64, usize)>,
+    /// The node the last `next()` returned, for `remove()`.
+    pub last: Option<u64>,
+}
+
+/// Where for-each tokens start: far from any stamp a real modification count
+/// reaches, so the two can never be confused.
+const FIRST_CHM_TOKEN: i32 = 1_500_000_000;
+
+/// Cursor keys at or above this are for-each tokens; below, they are an
+/// iterator object's own reference.
+const CHM_TOKEN_BASE: u64 = 1 << 40;
+
+/// The cursor key of a for-each token.
+#[must_use]
+pub fn chm_token_key(token: i32) -> u64 {
+    CHM_TOKEN_BASE + u64::from(token.cast_unsigned())
+}
+
+/// Whether an int a for-each loop holds is a `ConcurrentHashMap` token rather
+/// than a modification count.
+#[must_use]
+pub fn is_chm_token(stamp: i32) -> bool {
+    stamp >= FIRST_CHM_TOKEN
 }
 
 /// The autoboxing-cache key for a wrapper class and value, or `None` when the
@@ -1733,6 +1774,8 @@ impl Default for Heap {
             view_class: std::collections::HashMap::new(),
             entry_class: std::collections::HashMap::new(),
             vector_capacity: std::collections::HashMap::new(),
+            chm_cursors: std::collections::HashMap::new(),
+            next_chm_token: FIRST_CHM_TOKEN,
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
         }
@@ -1888,7 +1931,73 @@ impl Heap {
     }
 
     /// Drop the views whose objects the collector swept.
+    /// Start a cursor over the `ConcurrentHashMap` `map`, under `key`.
+    pub fn chm_cursor_start(&mut self, key: u64, map: HeapRef) {
+        let next = match self.get(map) {
+            Some(HeapObject::HashMap(table) | HeapObject::HashSet(table)) => table.chm_first(),
+            _ => None,
+        };
+        self.chm_cursors.insert(
+            key,
+            ChmCursor {
+                map,
+                next,
+                last: None,
+            },
+        );
+    }
+
+    /// A fresh for-each token, its cursor started over `map`.
+    pub fn chm_loop_token(&mut self, map: HeapRef) -> i32 {
+        let token = self.next_chm_token;
+        self.next_chm_token = self.next_chm_token.checked_add(1).unwrap_or(FIRST_CHM_TOKEN);
+        self.chm_cursor_start(chm_token_key(token), map);
+        token
+    }
+
+    /// The cursor under `key`, if there is one.
+    #[must_use]
+    pub fn chm_cursor(&self, key: u64) -> Option<ChmCursor> {
+        self.chm_cursors.get(&key).copied()
+    }
+
+    /// Step a cursor: the node it returns now (and the map), having chosen
+    /// the next one.
+    pub fn chm_cursor_advance(&mut self, key: u64) -> Option<(HeapRef, u64)> {
+        let cursor = self.chm_cursors.get(&key).copied()?;
+        let (id, bin) = cursor.next?;
+        let next = match self.get(cursor.map) {
+            Some(HeapObject::HashMap(table) | HeapObject::HashSet(table)) => {
+                table.chm_successor(id, bin)
+            }
+            _ => None,
+        };
+        if let Some(entry) = self.chm_cursors.get_mut(&key) {
+            entry.next = next;
+            entry.last = Some(id);
+        }
+        Some((cursor.map, id))
+    }
+
+    /// Forget a cursor's last node (after `remove()`).
+    pub fn chm_cursor_forget_last(&mut self, key: u64) {
+        if let Some(cursor) = self.chm_cursors.get_mut(&key) {
+            cursor.last = None;
+        }
+    }
+
+    /// A finished loop's cursor.
+    pub fn chm_cursor_end(&mut self, key: u64) {
+        self.chm_cursors.remove(&key);
+    }
+
     pub fn retain_views(&mut self, alive: impl Fn(HeapRef) -> bool) {
+        // A cursor lives while its MAP does — and an iterator's while the
+        // iterator object does too.
+        self.chm_cursors.retain(|key, cursor| {
+            alive(cursor.map)
+                && (*key >= CHM_TOKEN_BASE || alive(HeapRef::try_from(*key).unwrap_or(0)))
+        });
         self.view_class.retain(|reference, _| alive(*reference));
         self.entry_class.retain(|reference, _| alive(*reference));
         self.vector_capacity

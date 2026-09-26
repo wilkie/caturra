@@ -9034,13 +9034,18 @@ counting catches: a divergence that stopped being one.
 - `Collectors.toConcurrentMap(...)` / `groupingByConcurrent(...)` — they collect
   into a `java.util.concurrent` map. On one thread the ordinary ones do the
   same job. (`strict_no_concurrent_collectors`)
-- The concurrent COLLECTIONS (`ConcurrentHashMap`, `CopyOnWriteArrayList`,
-  the blocking queues), the fork/join and scheduling executors, `CyclicBarrier`
-  and the rarer synchronizers of `java.util.concurrent`, and the array/adder
-  atomics and read-write locks of its two subpackages. The executors, futures,
-  latches, semaphores, reentrant lock and single-value atomics are modelled
-  (phase 2 of specs/CONCURRENCY.md); each of the rest is refused by NAME.
+- The other concurrent COLLECTIONS (`CopyOnWriteArrayList`, the blocking
+  queues, the skip-list collections), the fork/join and scheduling executors,
+  `CyclicBarrier` and the rarer synchronizers of `java.util.concurrent`, and
+  the array/adder atomics and read-write locks of its two subpackages. The
+  executors, futures, latches, semaphores, reentrant lock, single-value
+  atomics and `ConcurrentHashMap` are modelled (phase 2 of
+  specs/CONCURRENCY.md); each of the rest is refused by NAME.
   (`strict_no_concurrent_classes`)
+- A `ConcurrentHashMap`'s PARALLEL bulk operations — `forEachKey(parallelism,
+  …)`, the `reduce*` and `search*` families — refused by name: one engine
+  thread has no parallelism to offer, and `forEach`, a stream or a loop over
+  `entrySet()` does the same work. (`strict_no_concurrent_bulk_operations`)
 - `Character.getName(cp)`, `codePointOf(name)` and `getDirectionality(c)` —
   caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
   its siblings need, not the character database of NAMES.
@@ -15873,6 +15878,44 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `a_class_that_extends_number`, `string_value_of_a_type_variable`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
+
+### ConcurrentHashMap (2026-09-26)
+
+Refused by name until now, because caturra's collections are native and a
+bundled Java class could not be one. It is the same native map with a flag —
+as a `Hashtable` is — and what the flag changes was measured first:
+
+- **Its own ORDER.** Of 4000 random maps, a JDK iterated 2947 differently from
+  a `HashMap` of the same keys: a `ConcurrentHashMap` doubles its table when
+  the count REACHES three quarters (a `HashMap` when it passes), sizes
+  `new ConcurrentHashMap<>(n)` for a load factor of two thirds, and its
+  `transfer` keeps each chain's last run and pushes the nodes before it on the
+  front, reversed. Its order cannot be derived from the entries the way a
+  `HashMap`'s is, so `chm.rs` keeps the real chains and replays the JDK's
+  operations on them.
+- **No nulls**, in the positions a `Hashtable` refuses them (plus `merge`'s
+  value, which a `Hashtable` refuses too — that was missing).
+- **Weakly consistent cursors.** A cursor holds the node it returns next,
+  chosen when the last was returned, and follows live links; a removed node
+  keeps its link. Removing during a for-each, adding a key a later bucket
+  holds (and meeting it), `iterator.remove()` — none throws
+  `ConcurrentModificationException`. A for-each over a map VIEW is an index
+  loop here, so the view answers the loop's stamp with a cursor TOKEN, and the
+  loop bound asks `__hasNextIndexed` (for every other collection the same
+  `index != size`).
+- **Its own face** (`CollFace::Concurrent`), and `ConcurrentMap` as an
+  interface face beside it: a `HashMap` is neither, `mappingCount` and
+  `keys`/`elements`/`contains` are its members, `clone` is not.
+  `ConcurrentHashMap.newKeySet()` is a set over the same table.
+
+Found on the way: a refused member called with a LAMBDA
+(`Collectors.toConcurrentMap(s -> s, …)`) reported the lambda's lack of a
+target rather than the refusal; it says why now. Not modelled: a bin of eight
+or more colliding keys (a JDK treeifies it) and `keySet(defaultValue)`.
+Pinned as `a_concurrent_hash_map_s_own_order`,
+`a_concurrent_hash_map_s_contract`, `a_concurrent_map_shared_by_threads`,
+`a_concurrent_key_set`, `a_concurrent_map_is_not_a_hash_map` and
+`strict_no_concurrent_bulk_operations`.
 
 ### Each collection class is its own face (2026-09-26)
 

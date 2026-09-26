@@ -61941,7 +61941,7 @@ public class RS {
 stricter_than_javac!(
     strict_no_concurrent_classes,
     "StrictConcurrentClass",
-    "import java.util.concurrent.ConcurrentHashMap;\npublic class StrictConcurrentClass { static ConcurrentHashMap<String, Integer> m; }"
+    "import java.util.concurrent.CopyOnWriteArrayList;\npublic class StrictConcurrentClass { static CopyOnWriteArrayList<String> m; }"
 );
 
 // A modification count is a COUNT. caturra stamped every fail-fast cursor,
@@ -63047,6 +63047,203 @@ fn a_collection_class_is_not_its_sibling() {
         assert_both_reject(&class, &source);
     }
 }
+
+// `ConcurrentHashMap` is its own TABLE. Its resize happens when the count
+// REACHES three quarters (a `HashMap`'s when it passes), and its `transfer`
+// keeps the last run of each chain and pushes the nodes before it on the
+// front — reversed — so of 4000 random maps a JDK iterated 2947 differently
+// from a `HashMap` of the same keys. The table is replayed (`chm.rs`): 160
+// random maps of every size, the capacity constructor (JDK 11's two-thirds
+// sizing) and the copy constructor's presize, each printed as a JDK prints it.
+differential_test!(
+    a_concurrent_hash_map_s_own_order,
+    "O2",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+public class O2 {
+    public static void main(String[] args) {
+        Random r = new Random(7);
+        StringBuilder all = new StringBuilder();
+        for (int n = 1; n <= 120; n += 3) {
+            for (int t = 0; t < 4; t++) {
+                ConcurrentHashMap<Object, Integer> c = new ConcurrentHashMap<>();
+                for (int i = 0; i < n; i++) c.put(t % 2 == 0 ? (Object) ("k" + r.nextInt(1000)) : (Object) r.nextInt(5000), i);
+                all.append(c.keySet().hashCode()).append(' ').append(c.toString().hashCode()).append('\n');
+            }
+        }
+        ConcurrentHashMap<Integer,Integer> cap = new ConcurrentHashMap<>(5);
+        for (int i = 0; i < 12; i++) cap.put(i * 7, i);
+        System.out.print(all);
+        System.out.println(cap);
+        System.out.println(new ConcurrentHashMap<>(Map.of("a", 1, "b", 2, "c", 3, "d", 4, "e", 5, "f", 6, "g", 7, "h", 8, "i", 9, "j", 10)));
+        ConcurrentHashMap<String, Integer> m = new ConcurrentHashMap<>();
+        for (String k : "the quick brown fox jumps over the lazy dog".split(" ")) m.merge(k, 1, Integer::sum);
+        System.out.println(m + " " + m.mappingCount() + " " + m.getClass().getName());
+    }
+}
+"#
+);
+
+// What a `ConcurrentHashMap` does that a `HashMap` does not: no null key or
+// value anywhere one is handed in (null messages); cursors that are WEAKLY
+// CONSISTENT — removing during a for-each, adding a key a later bucket holds
+// (and seeing it), `iterator.remove()`, all without
+// ConcurrentModificationException; `keys()`/`elements()`, `mappingCount()`,
+// `contains`; the classes its views, entries and cursors are.
+differential_test!(
+    a_concurrent_hash_map_s_contract,
+    "M2",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+public class M2 {
+    interface B { Object get() throws Throwable; }
+    static void s(String l, B b) { try { System.out.println(l + " = " + b.get()); } catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); } }
+    public static void main(String[] args) {
+        ConcurrentHashMap<String, Integer> m = new ConcurrentHashMap<>();
+        for (String k : "the quick brown fox jumps over the lazy dog".split(" ")) m.merge(k, 1, Integer::sum);
+        s("m", () -> m);
+        s("class", () -> m.getClass().getName() + " " + m.keySet().getClass().getName() + " " + m.values().getClass().getName() + " " + m.entrySet().getClass().getName());
+        s("put null key", () -> m.put(null, 1));
+        s("put null value", () -> m.put("a", null));
+        s("get null", () -> m.get(null));
+        s("containsKey null", () -> m.containsKey(null));
+        s("containsValue null", () -> m.containsValue(null));
+        s("remove null", () -> m.remove(null));
+        s("getOrDefault null", () -> m.getOrDefault(null, 3));
+        s("putIfAbsent", () -> m.putIfAbsent("the", 9) + " " + m.putIfAbsent("cat", 7));
+        s("compute", () -> m.compute("dog", (k, v) -> v == null ? 1 : v + 10));
+        s("computeIfAbsent null result", () -> m.computeIfAbsent("zzz", k -> null) + " " + m.containsKey("zzz"));
+        s("mappingCount", () -> m.mappingCount() + " " + m.size());
+        s("remove during iteration", () -> { for (String k : m.keySet()) if (k.length() == 3) m.remove(k); return m; });
+        s("add during iteration", () -> { int n = 0; for (String k : m.keySet()) { if (n++ == 0) m.put("added", 0); } return n + " " + m; });
+        s("iterator remove", () -> { Iterator<String> it = m.keySet().iterator(); it.next(); it.remove(); return m; });
+        s("entry setValue", () -> { for (Map.Entry<String,Integer> e : m.entrySet()) e.setValue(e.getValue() * 2); return m; });
+        s("keySet add", () -> m.keySet().add("x"));
+        s("keys", () -> Collections.list(m.keys()));
+        s("elements", () -> Collections.list(m.elements()));
+        s("equals HashMap", () -> m.equals(new HashMap<>(m)) + " " + (m.hashCode() == new HashMap<>(m).hashCode()));
+        s("copy", () -> new ConcurrentHashMap<>(Map.of("a", 1, "b", 2, "c", 3)));
+        s("capacity 5", () -> { ConcurrentHashMap<Integer,Integer> c = new ConcurrentHashMap<>(5); for (int i = 0; i < 12; i++) c.put(i * 7, i); return c; });
+        s("replaceAll", () -> { m.replaceAll((k, v) -> v + 100); return m; });
+        s("forEach", () -> { StringBuilder sb = new StringBuilder(); m.forEach((k, v) -> sb.append(k.charAt(0))); return sb; });
+        s("remove(k,v)", () -> m.remove("fox", 1) + " " + m.remove("fox", 202));
+        s("replace", () -> m.replace("over", 0) + " " + m.replace("nope", 0));
+        s("toString empty", () -> new ConcurrentHashMap<>());
+        s("clear", () -> { m.clear(); return m.isEmpty(); });
+    }
+}
+"#
+);
+
+// The shape a threads lesson has: four pool threads `merge` into one
+// `ConcurrentMap`, and the counts are exact; a `ConcurrentMap` declared, cast
+// back, copied, streamed and walked with `forEachRemaining`.
+differential_test!(
+    a_concurrent_map_shared_by_threads,
+    "M3",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.stream.*;
+public class M3 {
+    public static void main(String[] args) throws Exception {
+        ConcurrentMap<String, Integer> counts = new ConcurrentHashMap<>();
+        ExecutorService pool = Executors.newFixedThreadPool(4);
+        String[] words = "a b c a b a d e a c".split(" ");
+        List<Future<?>> jobs = new ArrayList<>();
+        for (int t = 0; t < 4; t++) {
+            jobs.add(pool.submit(() -> { for (String w : words) counts.merge(w, 1, Integer::sum); }));
+        }
+        for (Future<?> j : jobs) j.get();
+        pool.shutdown();
+        System.out.println(counts + " " + (counts instanceof ConcurrentHashMap) + " " + (counts instanceof Map));
+        Map<String, Integer> asMap = counts;
+        ConcurrentHashMap<String, Integer> big = new ConcurrentHashMap<>();
+        big.putAll(asMap);
+        for (int i = 0; i < 20; i++) big.put("k" + i, i);
+        System.out.println(big);
+        System.out.println(big.keySet().stream().filter(k -> k.length() == 1).collect(Collectors.joining(",")));
+        System.out.println(big.values().stream().mapToInt(Integer::intValue).sum() + " " + big.entrySet().size());
+        Iterator<Integer> it = big.values().iterator();
+        it.next();
+        StringBuilder sb = new StringBuilder();
+        it.forEachRemaining(v -> sb.append(v).append(' '));
+        System.out.println(sb.toString().trim());
+        System.out.println(big.getOrDefault("zz", -1) + " " + big.containsValue(8) + " " + big.contains(8) + " " + big.computeIfPresent("a", (k, v) -> v * 10));
+        ConcurrentMap<String, Integer> copy = new ConcurrentHashMap<>(big);
+        System.out.println(copy.equals(big) + " " + copy.hashCode() + " " + new TreeMap<>(copy).firstKey());
+    }
+}
+"#
+);
+
+// `ConcurrentHashMap.newKeySet()`: a set whose table is a concurrent map's —
+// its order, its null refusal, its weakly consistent cursor, its class.
+differential_test!(
+    a_concurrent_key_set,
+    "M4",
+    r#"
+import java.util.*;
+import java.util.concurrent.*;
+public class M4 {
+    public static void main(String[] args) {
+        Set<String> s = ConcurrentHashMap.newKeySet();
+        for (String w : "the quick brown fox jumps over the lazy dog".split(" ")) s.add(w);
+        System.out.println(s + " " + s.size() + " " + s.getClass().getName() + " " + s.contains("fox"));
+        try { s.add(null); } catch (NullPointerException e) { System.out.println("add null " + e.getMessage()); }
+        try { s.contains(null); } catch (NullPointerException e) { System.out.println("contains null " + e.getMessage()); }
+        for (String w : s) if (w.length() == 3) s.remove(w);
+        System.out.println(s);
+        Iterator<String> it = s.iterator(); it.next(); it.remove();
+        System.out.println(s + " " + s.remove("zzz") + " " + s.addAll(List.of("a", "b")));
+        Set<Integer> big = ConcurrentHashMap.newKeySet(4);
+        for (int i = 0; i < 15; i++) big.add(i * 13);
+        System.out.println(big + " " + (big instanceof Set));
+        var v = ConcurrentHashMap.<String>newKeySet();
+        v.add("x");
+        System.out.println(v);
+    }
+}
+"#
+);
+
+#[test]
+fn a_concurrent_map_is_not_a_hash_map() {
+    if !jdk_available() {
+        eprintln!("skipping: no JDK on PATH");
+        return;
+    }
+    for (index, body) in [
+        r"ConcurrentMap<String,Integer> m = new HashMap<>();",
+        r"ConcurrentHashMap<String,Integer> c = new HashMap<>();",
+        r"HashMap<String,Integer> h = new ConcurrentHashMap<>();",
+        r"Object o = new ConcurrentHashMap<String,Integer>().clone();",
+        r"long n = new HashMap<String,Integer>().mappingCount();",
+        r"ConcurrentHashMap<String,Integer> c = (ConcurrentHashMap<String,Integer>) new HashMap<String,Integer>();",
+        r"ConcurrentMap<String,Integer> c = new ConcurrentHashMap<>(); ConcurrentHashMap<String,Integer> h = c;",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let class = format!("Chm{index}");
+        let source = format!(
+            "import java.util.*;\nimport java.util.concurrent.*;\npublic class {class} {{\n    \
+             public static void main(String[] a) {{ {body} }}\n}}\n"
+        );
+        assert_both_reject(&class, &source);
+    }
+}
+
+// Its PARALLEL bulk operations — `forEachKey(parallelism, …)`, the `reduce*`
+// and `search*` families — are refused by name: one engine thread has no
+// parallelism to offer, and `forEach`, a stream or a loop does the same work.
+stricter_than_javac!(
+    strict_no_concurrent_bulk_operations,
+    "StrictBulk",
+    "import java.util.concurrent.*;\npublic class StrictBulk { public static void main(String[] a) { new ConcurrentHashMap<String, Integer>().forEachKey(1, k -> {}); } }"
+);
 
 // `join()` declares `InterruptedException`, so an unhandled one is javac's own
 // first error — and a `catch` around it is legal rather than "never thrown in

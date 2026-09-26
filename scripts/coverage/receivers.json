@@ -183,6 +183,8 @@
   "java.util.Vector": "new java.util.Vector<String>()",
   "java.util.concurrent.Callable": "(java.util.concurrent.Callable<Object>) () -> null",
   "java.util.concurrent.CancellationException": "new java.util.concurrent.CancellationException(\"m\")",
+  "java.util.concurrent.ConcurrentHashMap": "new java.util.concurrent.ConcurrentHashMap<Object, Object>()",
+  "java.util.concurrent.ConcurrentMap": "(java.util.concurrent.ConcurrentMap<Object, Object>) new java.util.concurrent.ConcurrentHashMap<Object, Object>()",
   "java.util.concurrent.CountDownLatch": "new java.util.concurrent.CountDownLatch(1)",
   "java.util.concurrent.ExecutionException": "new java.util.concurrent.ExecutionException(new Exception(\"m\"))",
   "java.util.concurrent.Executor": "(java.util.concurrent.Executor) java.util.concurrent.Executors.newFixedThreadPool(1)",

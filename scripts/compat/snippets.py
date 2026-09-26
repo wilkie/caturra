@@ -2424,6 +2424,43 @@ public class Pool {
 }
 ''',
     ),
+    dict(
+        id="concurrent-hash-map",
+        category="Collections",
+        title="ConcurrentHashMap",
+        summary="Its own table — it resizes and reorders differently from a HashMap, so it iterates in its own order — no nulls, and weakly consistent cursors: removing or adding while iterating never throws ConcurrentModificationException.",
+        main="Tally",
+        source='''
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+
+public class Tally {
+    public static void main(String[] args) {
+        ConcurrentMap<String, Integer> counts = new ConcurrentHashMap<>();
+        for (String word : "to be or not to be that is the question".split(" ")) {
+            counts.merge(word, 1, Integer::sum);
+        }
+        System.out.println(counts);
+        for (String word : counts.keySet()) {
+            if (counts.get(word) == 1) {
+                counts.remove(word);
+            }
+        }
+        System.out.println(counts);
+        try {
+            counts.put("null", null);
+        } catch (NullPointerException e) {
+            System.out.println("no null values");
+        }
+        Set<String> seen = ConcurrentHashMap.newKeySet();
+        seen.add("b");
+        seen.add("a");
+        System.out.println(seen + " " + seen.getClass().getSimpleName());
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -2464,17 +2501,17 @@ public class Skeleton {
     dict(
         id="concurrent-collections",
         category="Library",
-        title="The concurrent collections",
-        summary="ConcurrentHashMap, CopyOnWriteArrayList and the blocking queues. Executors, futures, latches, locks and atomics run; caturra's collections are native rather than Java, so the concurrent ones are refused by name.",
-        main="Counts",
+        title="The other concurrent collections",
+        summary="CopyOnWriteArrayList, the blocking queues and the skip-list collections. ConcurrentHashMap runs, with its own order and weakly consistent cursors; these are refused by name.",
+        main="Snapshot",
         source='''
-import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 
-public class Counts {
+public class Snapshot {
     public static void main(String[] args) {
-        ConcurrentHashMap<String, Integer> counts = new ConcurrentHashMap<>();
-        counts.merge("a", 1, Integer::sum);
-        System.out.println(counts);
+        CopyOnWriteArrayList<String> names = new CopyOnWriteArrayList<>();
+        names.add("ada");
+        System.out.println(names);
     }
 }
 ''',

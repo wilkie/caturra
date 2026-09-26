@@ -8,6 +8,7 @@
 //! backed by the in-memory [`vfs::VirtualFileSystem`].
 
 pub mod bigint;
+pub mod chm;
 pub mod debug;
 pub mod decimal;
 pub(crate) mod floatdec;

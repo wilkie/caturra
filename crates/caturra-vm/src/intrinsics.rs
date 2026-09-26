@@ -3281,6 +3281,11 @@ pub fn instantiate(class: &str) -> Option<HeapObject> {
         // `Hashtable` a hash map with its own bucket order and no nulls.
         "java/util/Stack" | "java/util/Vector" => Some(HeapObject::Stack(Vec::new())),
         "java/util/Hashtable" => Some(HeapObject::HashMap(JavaHashMap::hashtable(11))),
+        // A `ConcurrentHashMap` keeps its real chains, since its resize
+        // reorders them (see `chm.rs`).
+        "java/util/concurrent/ConcurrentHashMap" => {
+            Some(HeapObject::HashMap(JavaHashMap::concurrent()))
+        }
         "java/util/TreeSet" | "java/util/EnumSet" => Some(HeapObject::TreeSet {
             values: Vec::new(),
             comparator: None,
@@ -4113,12 +4118,27 @@ pub fn invoke_special(
             let JValue::Int(capacity) = args[0] else {
                 return Err(throw("java.lang.VerifyError: expected an int argument"));
             };
+            // A `ConcurrentHashMap` refuses a negative capacity with no words.
+            if capacity < 0
+                && matches!(heap.get(receiver), Some(HeapObject::HashMap(map)) if map.is_concurrent())
+            {
+                return Err(throw("java.lang.IllegalArgumentException"));
+            }
             if capacity < 0 {
                 return Err(throw(format!(
                     "java.lang.IllegalArgumentException: Illegal initial capacity: {capacity}"
                 )));
             }
             match heap.get_mut(receiver) {
+                // `new ConcurrentHashMap<>(initialCapacity)` sizes for a load
+                // factor of two thirds (JDK 11), not a `HashMap`'s three
+                // quarters.
+                Some(HeapObject::HashMap(map)) if map.is_concurrent() => {
+                    *map = JavaHashMap::concurrent_with_capacity(
+                        usize::try_from(capacity).unwrap_or(0),
+                    );
+                    Ok(())
+                }
                 // `new HashSet<>(initialCapacity)` builds `new HashMap<>(cap)`,
                 // so the hint reaches the backing map identically.
                 Some(HeapObject::HashMap(map) | HeapObject::HashSet(map)) => {
@@ -9958,6 +9978,71 @@ pub(crate) fn iterator_step(heap: &mut Heap, cursor: HeapRef) -> Result<Option<J
 /// shows through on the next call — caturra does not model
 /// `ConcurrentModificationException`.
 #[allow(clippy::too_many_lines)] // one arm per Iterator/ListIterator method
+/// `hasNext`/`next`/`remove` on a `ConcurrentHashMap` cursor (see
+/// `value::ChmCursor`): the node chosen last time is returned even if it has
+/// since been removed, the next one is chosen at once, and `remove()` removes
+/// the last node's KEY from the map — nothing ever throws
+/// `ConcurrentModificationException`.
+fn chm_iterator_method(
+    heap: &mut Heap,
+    receiver: HeapRef,
+    source: HeapRef,
+    method: &str,
+    writes: IteratorWrites,
+) -> Result<Option<JValue>, VmError> {
+    let key = u64::from(receiver);
+    let kind = match heap.get(source) {
+        Some(HeapObject::MapView { kind, .. }) => *kind,
+        _ => MapViewKind::Keys,
+    };
+    match method {
+        "hasNext" => Ok(Some(JValue::Int(i32::from(
+            heap.chm_cursor(key).is_some_and(|cursor| cursor.next.is_some()),
+        )))),
+        "next" => {
+            let Some((map, id)) = heap.chm_cursor_advance(key) else {
+                return Err(throw("java.util.NoSuchElementException"));
+            };
+            let Some(HeapObject::HashMap(table) | HeapObject::HashSet(table)) = heap.get(map) else {
+                return Ok(Some(JValue::NULL));
+            };
+            let Some((node_key, value)) = table.chm_node(id) else {
+                return Ok(Some(JValue::NULL));
+            };
+            Ok(Some(match kind {
+                MapViewKind::Keys => node_key,
+                MapViewKind::Values => value,
+                MapViewKind::Entries => JValue::Ref(Some(heap.alloc(HeapObject::MapEntry {
+                    map,
+                    key: node_key,
+                    read_only: false,
+                }))),
+            }))
+        }
+        "remove" if writes == IteratorWrites::All => {
+            let Some(cursor) = heap.chm_cursor(key) else {
+                return Ok(None);
+            };
+            let Some(last) = cursor.last else {
+                return Err(throw("java.lang.IllegalStateException"));
+            };
+            heap.chm_cursor_forget_last(key);
+            if let Some(HeapObject::HashMap(table) | HeapObject::HashSet(table)) =
+                heap.get_mut(cursor.map)
+                && let Some(at) = table.chm_index(last)
+            {
+                table.remove_at(at);
+            }
+            Ok(None)
+        }
+        "remove" => Err(throw("java.lang.UnsupportedOperationException")),
+        "forEachRemaining" => Ok(None),
+        _ => Err(throw(format!(
+            "java.lang.UnsupportedOperationException: {method}"
+        ))),
+    }
+}
+
 fn iterator_method(
     heap: &mut Heap,
     receiver: HeapRef,
@@ -10007,6 +10092,10 @@ fn iterator_method(
         "nextElement" => "next",
         other => other,
     };
+    // A `ConcurrentHashMap` cursor: weakly consistent, never fail-fast.
+    if heap.chm_cursor(u64::from(receiver)).is_some() {
+        return chm_iterator_method(heap, receiver, source, method, writes);
+    }
     // A cursor over a read-only view refuses the same mutators the view does —
     // `set` survives on a FIXED-SIZE `Arrays.asList`, whose element write goes
     // through to the array. The JDK reaches this by having `Itr.remove` call
@@ -13997,6 +14086,22 @@ pub fn invoke_static(
             }
             _ => Err(VmError::UnknownIntrinsic(format!("BitSet.{method}"))),
         },
+        // `ConcurrentHashMap.newKeySet()`: a set over a `ConcurrentHashMap`'s
+        // table, so it iterates, refuses nulls and walks as one does.
+        "java/util/concurrent/ConcurrentHashMap" if method == "newKeySet" => {
+            let table = match args.first() {
+                Some(JValue::Int(capacity)) if *capacity < 0 => {
+                    return Err(throw("java.lang.IllegalArgumentException"));
+                }
+                Some(JValue::Int(capacity)) => {
+                    JavaHashMap::concurrent_with_capacity(usize::try_from(*capacity).unwrap_or(0))
+                }
+                _ => JavaHashMap::concurrent(),
+            };
+            let set = heap.alloc(HeapObject::HashSet(table));
+            heap.set_view_class(set, "java/util/concurrent/ConcurrentHashMap$KeySetView");
+            Ok(Some(JValue::Ref(Some(set))))
+        }
         // `UUID.fromString(text)` and `UUID.randomUUID()`. The random one
         // cannot match a JDK's VALUE — a JDK draws from a secure source — but
         // its SHAPE is fixed: version 4, variant 2.

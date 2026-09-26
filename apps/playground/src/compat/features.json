@@ -660,6 +660,16 @@
     "expected": "42\n2000\njava.lang.NumberFormatException: For input string: \"x\"\ntrue\n"
   },
   {
+    "id": "concurrent-hash-map",
+    "category": "Collections",
+    "title": "ConcurrentHashMap",
+    "summary": "Its own table \u2014 it resizes and reorders differently from a HashMap, so it iterates in its own order \u2014 no nulls, and weakly consistent cursors: removing or adding while iterating never throws ConcurrentModificationException.",
+    "main": "Tally",
+    "source": "import java.util.Set;\nimport java.util.concurrent.ConcurrentHashMap;\nimport java.util.concurrent.ConcurrentMap;\n\npublic class Tally {\n    public static void main(String[] args) {\n        ConcurrentMap<String, Integer> counts = new ConcurrentHashMap<>();\n        for (String word : \"to be or not to be that is the question\".split(\" \")) {\n            counts.merge(word, 1, Integer::sum);\n        }\n        System.out.println(counts);\n        for (String word : counts.keySet()) {\n            if (counts.get(word) == 1) {\n                counts.remove(word);\n            }\n        }\n        System.out.println(counts);\n        try {\n            counts.put(\"null\", null);\n        } catch (NullPointerException e) {\n            System.out.println(\"no null values\");\n        }\n        Set<String> seen = ConcurrentHashMap.newKeySet();\n        seen.add(\"b\");\n        seen.add(\"a\");\n        System.out.println(seen + \" \" + seen.getClass().getSimpleName());\n    }\n}\n",
+    "status": "supported",
+    "expected": "{the=1, that=1, not=1, be=2, or=1, question=1, is=1, to=2}\n{be=2, to=2}\nno null values\n[a, b] KeySetView\n"
+  },
+  {
     "id": "abstract-collections",
     "category": "Collections",
     "title": "The AbstractCollection skeletons",
@@ -672,12 +682,12 @@
   {
     "id": "concurrent-collections",
     "category": "Library",
-    "title": "The concurrent collections",
-    "summary": "ConcurrentHashMap, CopyOnWriteArrayList and the blocking queues. Executors, futures, latches, locks and atomics run; caturra's collections are native rather than Java, so the concurrent ones are refused by name.",
-    "main": "Counts",
-    "source": "import java.util.concurrent.ConcurrentHashMap;\n\npublic class Counts {\n    public static void main(String[] args) {\n        ConcurrentHashMap<String, Integer> counts = new ConcurrentHashMap<>();\n        counts.merge(\"a\", 1, Integer::sum);\n        System.out.println(counts);\n    }\n}\n",
+    "title": "The other concurrent collections",
+    "summary": "CopyOnWriteArrayList, the blocking queues and the skip-list collections. ConcurrentHashMap runs, with its own order and weakly consistent cursors; these are refused by name.",
+    "main": "Snapshot",
+    "source": "import java.util.concurrent.CopyOnWriteArrayList;\n\npublic class Snapshot {\n    public static void main(String[] args) {\n        CopyOnWriteArrayList<String> names = new CopyOnWriteArrayList<>();\n        names.add(\"ada\");\n        System.out.println(names);\n    }\n}\n",
     "status": "unsupported",
-    "reason": "java.util.concurrent.ConcurrentHashMap is not supported by caturra (the class library covers the AP CS A subset)"
+    "reason": "java.util.concurrent.CopyOnWriteArrayList is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
     "id": "class-modifiers",

@@ -166,6 +166,8 @@ const JAVA_UTIL_CONCURRENT: &[&str] = &[
     "TimeoutException",
     "CancellationException",
     "RejectedExecutionException",
+    "ConcurrentHashMap",
+    "ConcurrentMap",
 ];
 
 /// `java.util.concurrent.atomic` — the four single-value atomics.
@@ -474,10 +476,8 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "CompletionException",
             "CompletionService",
             "CompletionStage",
-            "ConcurrentHashMap",
             "ConcurrentLinkedDeque",
             "ConcurrentLinkedQueue",
-            "ConcurrentMap",
             "ConcurrentNavigableMap",
             "ConcurrentSkipListMap",
             "ConcurrentSkipListSet",

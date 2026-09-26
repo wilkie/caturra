@@ -4782,6 +4782,8 @@ fn raw_library_internal(name: &str) -> Option<&'static str> {
         "Stack" => "java/util/Stack",
         "Vector" => "java/util/Vector",
         "Hashtable" => "java/util/Hashtable",
+        "ConcurrentHashMap" => "java/util/concurrent/ConcurrentHashMap",
+        "ConcurrentMap" => "java/util/concurrent/ConcurrentMap",
         "Enumeration" => "java/util/Enumeration",
         "PriorityQueue" => "java/util/PriorityQueue",
         "Queue" => "java/util/Queue",
@@ -6115,7 +6117,7 @@ fn elem_widens_to_class(arg: ElemType, class: ClassId, table: &MethodTable) -> b
 fn modelled_collection_name(simple: &str) -> Option<&'static str> {
     Some(match simple {
         "List" => "ArrayList",
-        "Map" | "LinkedHashMap" | "EnumMap" => "HashMap",
+        "Map" | "LinkedHashMap" | "EnumMap" | "ConcurrentHashMap" | "ConcurrentMap" => "HashMap",
         "HashSet" | "LinkedHashSet" | "EnumSet" => "Set",
         _ => return None,
     })
@@ -6194,19 +6196,28 @@ fn faced_class(ty: JType) -> Option<&'static str> {
     Some(match ty {
         JType::List { face, .. } => match face {
             CollFace::Iface => "java/util/List",
-            CollFace::Concrete | CollFace::Linked | CollFace::Enum => "java/util/ArrayList",
+            CollFace::Concrete
+            | CollFace::Linked
+            | CollFace::Enum
+            | CollFace::Concurrent
+            | CollFace::ConcurrentMap => "java/util/ArrayList",
         },
         JType::Set { face, .. } => match face {
             CollFace::Iface => "java/util/Set",
             CollFace::Concrete => "java/util/HashSet",
             CollFace::Linked => "java/util/LinkedHashSet",
             CollFace::Enum => "java/util/EnumSet",
+            CollFace::Concurrent | CollFace::ConcurrentMap => {
+                "java/util/concurrent/ConcurrentHashMap$KeySetView"
+            }
         },
         JType::Map { face, .. } => match face {
             CollFace::Iface => "java/util/Map",
             CollFace::Concrete => "java/util/HashMap",
             CollFace::Linked => "java/util/LinkedHashMap",
             CollFace::Enum => "java/util/EnumMap",
+            CollFace::Concurrent => "java/util/concurrent/ConcurrentHashMap",
+            CollFace::ConcurrentMap => "java/util/concurrent/ConcurrentMap",
         },
         // The sorted families have three faces each rather than two, and they
         // are named the same way: an array of one calls itself what was
@@ -6896,7 +6907,8 @@ fn builtin_table_by_name(simple: &str) -> Option<&'static [BuiltinMethod]> {
         "LinkedList" => LINKEDLIST_METHODS,
         "ArrayDeque" | "Deque" => DEQUE_METHODS,
         "Queue" | "PriorityQueue" => QUEUE_METHODS,
-        "HashMap" | "LinkedHashMap" | "Map" | "Hashtable" => MAP_METHODS,
+        "HashMap" | "LinkedHashMap" | "Map" | "Hashtable" | "ConcurrentHashMap"
+        | "ConcurrentMap" => MAP_METHODS,
         "TreeMap" | "NavigableMap" | "SortedMap" | "EnumMap" => TREEMAP_METHODS,
         "HashSet" | "LinkedHashSet" | "Set" => SET_METHODS,
         "TreeSet" | "NavigableSet" | "SortedSet" | "EnumSet" => TREESET_METHODS,
@@ -9477,6 +9489,12 @@ enum CollFace {
     /// `EnumSet` / `EnumMap` — a class of its own beside the concrete one
     /// (both are `Set`/`Map`s, neither is the other).
     Enum,
+    /// `ConcurrentHashMap` — likewise only a `Map`: its own table, order and
+    /// null rules at run time, and its own members (`mappingCount`, `keys`).
+    Concurrent,
+    /// `ConcurrentMap` — the INTERFACE a `ConcurrentHashMap` is, and nothing
+    /// else here is: a `Map`'s members, and a `HashMap` is not one.
+    ConcurrentMap,
 }
 
 /// Which of the two builders a [`JType::StringBuilder`] is. A `StringBuffer`
@@ -9595,6 +9613,7 @@ impl CollFace {
         self == other
             || other == CollFace::Iface
             || (self == CollFace::Linked && other == CollFace::Concrete)
+            || (self == CollFace::Concurrent && other == CollFace::ConcurrentMap)
     }
 
     /// The face a collection type NAMES — which of the classes one storage
@@ -9606,6 +9625,8 @@ impl CollFace {
             "List" | "Set" | "Map" => CollFace::Iface,
             "LinkedHashMap" | "LinkedHashSet" => CollFace::Linked,
             "EnumMap" | "EnumSet" => CollFace::Enum,
+            "ConcurrentHashMap" => CollFace::Concurrent,
+            "ConcurrentMap" => CollFace::ConcurrentMap,
             _ => CollFace::Concrete,
         }
     }
@@ -9614,7 +9635,11 @@ impl CollFace {
     fn list_name(self) -> &'static str {
         match self {
             CollFace::Iface => "List",
-            CollFace::Concrete | CollFace::Linked | CollFace::Enum => "ArrayList",
+            CollFace::Concrete
+            | CollFace::Linked
+            | CollFace::Enum
+            | CollFace::Concurrent
+            | CollFace::ConcurrentMap => "ArrayList",
         }
     }
 
@@ -9625,6 +9650,7 @@ impl CollFace {
             CollFace::Concrete => "HashSet",
             CollFace::Linked => "LinkedHashSet",
             CollFace::Enum => "EnumSet",
+            CollFace::Concurrent | CollFace::ConcurrentMap => "KeySetView",
         }
     }
 
@@ -9635,6 +9661,8 @@ impl CollFace {
             CollFace::Concrete => "HashMap",
             CollFace::Linked => "LinkedHashMap",
             CollFace::Enum => "EnumMap",
+            CollFace::Concurrent => "ConcurrentHashMap",
+            CollFace::ConcurrentMap => "ConcurrentMap",
         }
     }
 }
@@ -10010,6 +10038,9 @@ enum TableFace {
     /// A `Hashtable`, which shares the `HashMap` table and adds the three
     /// members a `HashMap` has not got: `keys`, `elements` and `contains`.
     Hashtable,
+    /// A `ConcurrentHashMap`: the `Hashtable`'s three and its own
+    /// (`mappingCount`) — but not `clone`, which it does not make public.
+    Concurrent,
 }
 
 impl Default for TableFace {
@@ -10038,7 +10069,7 @@ impl TableFace {
     /// nest, so it is an ordering: a `TreeSet` has everything a
     /// `NavigableSet` does, which has everything a `SortedSet` does.
     fn offers(self, needed: TableFace) -> bool {
-        self >= needed
+        self >= needed && !(self == TableFace::Concurrent && needed == TableFace::Concrete)
     }
 
     /// The JVM internal name of the SET face this role presents.
@@ -13277,6 +13308,10 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
+/// Why a `ConcurrentHashMap`'s parallel bulk operations are refused.
+const NO_BULK_OPS: &str = "caturra does not model ConcurrentHashMap's parallel bulk operations; \
+     forEach, a stream, or a loop over entrySet() does the same job";
+
 /// Why a scheduling executor is refused.
 const NO_SCHEDULER: &str = "caturra does not model java.util.concurrent.ScheduledExecutorService \
      yet; a Thread that sleeps between runs does the same job";
@@ -13303,6 +13338,31 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Executors", "privilegedCallable", NO_SECURITY_MANAGER),
     ("Executors", "privilegedCallableUsingCurrentClassLoader", NO_SECURITY_MANAGER),
     ("Executors", "privilegedThreadFactory", NO_SECURITY_MANAGER),
+    // A `ConcurrentHashMap`'s PARALLEL bulk operations, each taking a
+    // parallelism threshold.
+    ("ConcurrentHashMap", "forEachEntry", NO_BULK_OPS),
+    ("ConcurrentHashMap", "forEachKey", NO_BULK_OPS),
+    ("ConcurrentHashMap", "forEachValue", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduce", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceEntries", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceEntriesToDouble", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceEntriesToInt", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceEntriesToLong", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceKeys", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceKeysToDouble", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceKeysToInt", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceKeysToLong", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceToDouble", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceToInt", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceToLong", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceValues", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceValuesToDouble", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceValuesToInt", NO_BULK_OPS),
+    ("ConcurrentHashMap", "reduceValuesToLong", NO_BULK_OPS),
+    ("ConcurrentHashMap", "search", NO_BULK_OPS),
+    ("ConcurrentHashMap", "searchEntries", NO_BULK_OPS),
+    ("ConcurrentHashMap", "searchKeys", NO_BULK_OPS),
+    ("ConcurrentHashMap", "searchValues", NO_BULK_OPS),
     ("Condition", "awaitUntil", "caturra does not model java.util.Date; await(time, unit) waits the same way"),
     ("Thread", "getUncaughtExceptionHandler", NO_HANDLERS),
     ("Thread", "setUncaughtExceptionHandler", NO_HANDLERS),
@@ -13677,12 +13737,12 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     (
         "Collectors",
         "groupingByConcurrent",
-        "caturra runs on one thread and models no concurrent map - Collectors.groupingBy does the same job here",
+        "caturra does not model the concurrent collectors - Collectors.groupingBy does the same job here",
     ),
     (
         "Collectors",
         "toConcurrentMap",
-        "caturra runs on one thread and models no concurrent map - Collectors.toMap does the same job here",
+        "caturra does not model the concurrent collectors - Collectors.toMap does the same job here",
     ),
     // ---- `Stream.builder()` answers a `Stream.Builder`, a mutable
     // accumulator caturra models no type for.
@@ -14085,6 +14145,12 @@ fn receiver_class_name(receiver: JType) -> &'static str {
         JType::Str => "String",
         JType::Scanner => "Scanner",
         JType::List { .. } => "ArrayList",
+        // A `ConcurrentHashMap` has refusals of its own (its parallel bulk
+        // operations), asked by its own name.
+        JType::Map {
+            face: CollFace::Concurrent,
+            ..
+        } => "ConcurrentHashMap",
         JType::Map { .. } => "HashMap",
         JType::TreeMap { role, .. } => role.map_internal().rsplit('/').next().unwrap_or("TreeMap"),
         JType::Set { .. } | JType::EntrySet { .. } => "Set",
@@ -23120,6 +23186,9 @@ const MAP_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;)Z",
         TableFace::Hashtable,
     ),
+    // A `ConcurrentHashMap`'s size as a `long` (a count past `int` is what
+    // it was added for).
+    bm_at("mappingCount", &[], BRet::Long, "()J", TableFace::Concurrent),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -25617,6 +25686,10 @@ impl TypeArgs {
             // The two legacy collections are faces of tables they share.
             JType::Vector(_) => TableFace::Vector,
             JType::Hashtable { .. } => TableFace::Hashtable,
+            JType::Map {
+                face: CollFace::Concurrent,
+                ..
+            } => TableFace::Concurrent,
             // A hash collection's face is the same distinction with two values
             // instead of three: the INTERFACE offers what `List`/`Set`/`Map`
             // declare, and the class adds its own (`clone`, which only
@@ -25631,7 +25704,7 @@ impl TypeArgs {
                 ..
             }
             | JType::Map {
-                face: CollFace::Iface,
+                face: CollFace::Iface | CollFace::ConcurrentMap,
                 ..
             }
             // ...and a queue's face is the same distinction a third time: a
@@ -31612,7 +31685,7 @@ impl BodyGen<'_> {
                     },
                 }
             }
-            "HashMap" | "Map" | "LinkedHashMap" | "EnumMap" => {
+            "HashMap" | "Map" | "LinkedHashMap" | "EnumMap" | "ConcurrentHashMap" => {
                 let (key, value) = if let [key, value] = type_args {
                     (
                         elem_from_type_arg(key, self.table),
@@ -31964,6 +32037,14 @@ impl BodyGen<'_> {
                 // reports, both of which the object carries.
                 "EnumMap" => {
                     return self.new_hash_map("java/util/EnumMap", type_args, args, span);
+                }
+                "ConcurrentHashMap" => {
+                    return self.new_hash_map(
+                        "java/util/concurrent/ConcurrentHashMap",
+                        type_args,
+                        args,
+                        span,
+                    );
                 }
                 "HashSet" => {
                     return self.new_hash_set("java/util/HashSet", type_args, args, span);
@@ -35114,6 +35195,17 @@ impl BodyGen<'_> {
         };
         if path.len() != 1 && !(path.len() == 3 && path[0] == "java") {
             return None;
+        }
+        // `ConcurrentHashMap.newKeySet()` — the same answer the emitter gives.
+        if path.last().is_some_and(|name| name == "ConcurrentHashMap")
+            && method == "newKeySet"
+            && args.len() <= 1
+            && !self.table.has_class("ConcurrentHashMap")
+        {
+            return Some(JType::Set {
+                elem: self.erased_elem(),
+                face: CollFace::Concurrent,
+            });
         }
         // `Optional.<String>empty()` — the WITNESS is the only thing that says
         // what the empty Optional holds. The emission path reads it too; this
@@ -38324,20 +38416,31 @@ impl BodyGen<'_> {
             JType::Set { .. } | JType::TreeSet(_, _) | JType::EntrySet { .. }
         );
         self.code.bind(cond_label);
-        self.emit_load(index_slot, JType::Int);
         if hash_ordered {
+            // `index != expected`, asked of the collection: a view of a
+            // `ConcurrentHashMap` answers from its weakly consistent cursor
+            // instead (the stamp is then that cursor's token), and every
+            // other collection with exactly this comparison.
+            let has_next = intern_method_ref(self.pool, class, "__hasNextIndexed", "(III)Z");
+            self.emit_load(list_slot, iterable_ty);
+            self.emit_load(index_slot, JType::Int);
             self.emit_load(expected_slot, JType::Int);
+            self.emit_load(mod_slot, JType::Int);
+            self.code.push_op_u16(op::INVOKEVIRTUAL, has_next, 1);
+            self.code.drop_stack(4);
+            self.code.branch(op::IFEQ, end, 1);
         } else {
+            self.emit_load(index_slot, JType::Int);
             self.emit_load(list_slot, iterable_ty);
             self.code.push_op_u16(op::INVOKEVIRTUAL, size_ref, 1);
             self.code.drop_stack(1);
+            // `index != size`, NOT `index < size`: the JDK's `hasNext` is
+            // `cursor != size`, and the difference is observable. After a
+            // `clear()` mid-loop the cursor sits PAST the (now zero) size, and
+            // `!=` keeps going so the element fetch can throw CME — where `<`
+            // would end the loop quietly and swallow the error.
+            self.code.branch(op::IF_ICMPEQ, end, 2);
         }
-        // `index != size`, NOT `index < size`: the JDK's `hasNext` is
-        // `cursor != size`, and the difference is observable. After a `clear()`
-        // mid-loop the cursor sits PAST the (now zero) size, and `!=` keeps
-        // going so the element fetch can throw CME — where `<` would end the
-        // loop quietly and swallow the error.
-        self.code.branch(op::IF_ICMPEQ, end, 2);
 
         self.emit_load(list_slot, iterable_ty);
         self.emit_load(index_slot, JType::Int);
@@ -38564,8 +38667,9 @@ impl BodyGen<'_> {
                         // `java.nio.file` ones — none a bundled class nor in a
                         // fixed static table (their returns are handled inline).
                         || matches!(single, "Optional" | "Path" | "Paths" | "Files" | "Objects")
-                        // `EnumSet` is nothing BUT static factories.
-                        || single == "EnumSet"
+                        // `EnumSet` is nothing BUT static factories, and a
+                        // `ConcurrentHashMap` has one (`newKeySet`).
+                        || matches!(single, "EnumSet" | "ConcurrentHashMap")
                         // `List`/`Set`/`Map` hold Java 9's immutable `of`
                         // factories — the only statics those interfaces have.
                         || matches!(single, "List" | "Set" | "Map")
@@ -38873,6 +38977,49 @@ impl BodyGen<'_> {
         // The stream SOURCES. Each is variadic or array-taking, so none fits a
         // fixed method table: `Stream.of(...)`, `IntStream.of(...)` and
         // `Arrays.stream(array)` all lower to one array plus a call.
+        // A refused member called with a LAMBDA says why it is refused: the
+        // lambda has no target type to take, and the error that reports THAT
+        // would otherwise be the only one said —
+        // `Collectors.toConcurrentMap(s -> s, s -> 1)` read as a mistake in
+        // the lambdas.
+        if args
+            .iter()
+            .any(|arg| matches!(arg, Expr::Lambda { .. } | Expr::MethodRef { .. }))
+            && !self.table.has_class(class)
+            && let Some(reason) = unsupported_member(class, method)
+        {
+            self.error(span, format!("{class}.{method} exists in Java, but {reason}"));
+            return None;
+        }
+        // `ConcurrentHashMap.newKeySet()` / `newKeySet(capacity)`: a set whose
+        // table IS a `ConcurrentHashMap`'s — its order, its null refusal, its
+        // weakly consistent cursor — and whose element the assignment decides.
+        if class == "ConcurrentHashMap" && method == "newKeySet" && !self.table.has_class(class) {
+            let descriptor = match args {
+                [] => "()Ljava/util/concurrent/ConcurrentHashMap$KeySetView;",
+                [capacity] => {
+                    let ty = self.expr(capacity);
+                    self.convert_for_assignment(ty, JType::Int, capacity.span());
+                    "(I)Ljava/util/concurrent/ConcurrentHashMap$KeySetView;"
+                }
+                _ => {
+                    self.no_suitable_library_method("ConcurrentHashMap", method, args, span);
+                    return None;
+                }
+            };
+            let method_ref = intern_method_ref(
+                self.pool,
+                "java/util/concurrent/ConcurrentHashMap",
+                "newKeySet",
+                descriptor,
+            );
+            self.code.push_op_u16(op::INVOKESTATIC, method_ref, 1);
+            self.code.drop_stack(u16::try_from(args.len()).unwrap_or(0));
+            return Some(Some(JType::Set {
+                elem: self.erased_elem(),
+                face: CollFace::Concurrent,
+            }));
+        }
         let stream_source = match (class, method) {
             (
                 "Stream" | "IntStream" | "LongStream" | "DoubleStream",
@@ -40884,6 +41031,10 @@ impl BodyGen<'_> {
                 ("DoubleStream", "empty") => JType::DoubleStream,
                 ("Collections", "emptyList") => JType::library_list(object),
                 ("Collections", "emptySet") => JType::library_set(object),
+                ("ConcurrentHashMap", "newKeySet") => JType::Set {
+                    elem: object,
+                    face: CollFace::Concurrent,
+                },
                 ("Collections", "emptyMap") => JType::library_map(object, object),
                 // javac infers `Optional<Object>` here, the same way it
                 // infers `List<Object>` for `List.of()` — the context-free
@@ -45456,11 +45607,11 @@ impl BodyGen<'_> {
                 ..
             }
             | JType::Set {
-                face: CollFace::Concrete | CollFace::Linked | CollFace::Enum,
+                face: CollFace::Concrete | CollFace::Linked | CollFace::Enum | CollFace::Concurrent,
                 ..
             }
             | JType::Map {
-                face: CollFace::Concrete | CollFace::Linked | CollFace::Enum,
+                face: CollFace::Concrete | CollFace::Linked | CollFace::Enum | CollFace::Concurrent,
                 ..
             }
             // The same for the collections whose role already records it: a

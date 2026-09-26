@@ -414,9 +414,11 @@ they are mostly source, and each is measured against a JDK as it lands.
 _Done (2026-09-26)._ As built: `stdlib/concurrent.java`, injected when a
 source names the package. The executors, futures, `TimeUnit`, `CountDownLatch`,
 `Semaphore`, `ReentrantLock`/`Condition` and the four single-value atomics.
-`ConcurrentHashMap` is NOT among them — caturra's collections are native, not
-Java a bundled class could extend — so it and the other concurrent collections
-stay refused by name, as do `CyclicBarrier`, `CompletableFuture`, the
+`ConcurrentHashMap` came after, as a flag on the native map with its own
+table model (`crates/caturra-vm/src/chm.rs`) and weakly consistent cursors —
+caturra's collections are native, not Java a bundled class could extend. The
+other concurrent collections stay refused by name, as do `CyclicBarrier`,
+`CompletableFuture`, the
 scheduled and fork/join executors. A pool the program never shuts down ends in
 the everything-parked report, with a line naming `shutdown()`.
 

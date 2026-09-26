@@ -59,6 +59,9 @@ struct Entry {
     /// same bucket at every smaller table size (the mask only grows), so one
     /// sequence per entry reproduces the chain order across resizes.
     seq: i64,
+    /// A stable identity for the node, which a `ConcurrentHashMap` cursor
+    /// holds on to (storage positions shift on every removal).
+    id: u64,
 }
 
 /// A `java.util.HashMap` with the JDK's iteration order.
@@ -94,6 +97,14 @@ pub struct JavaHashMap {
     hashtable: bool,
     /// What `new Hashtable<>(capacity)` asked for, which shifts every bucket.
     hashtable_capacity: usize,
+    /// A `java.util.concurrent.ConcurrentHashMap`: its real chains, replayed
+    /// (see `chm.rs`), since its order cannot be derived from its entries.
+    concurrent: Option<Box<crate::chm::ChmTable>>,
+    /// The next node id handed out.
+    next_id: u64,
+    /// The key and value of each REMOVED node of a `ConcurrentHashMap`: a
+    /// weakly consistent cursor that already chose one still returns it.
+    ghosts: HashMap<u64, (JValue, JValue)>,
 }
 
 impl JavaHashMap {
@@ -119,6 +130,85 @@ impl JavaHashMap {
             hashtable_capacity: capacity.max(1),
             ..Self::default()
         }
+    }
+
+    /// A `ConcurrentHashMap` — its own table, its own resize, its own order.
+    #[must_use]
+    pub fn concurrent() -> Self {
+        Self {
+            concurrent: Some(Box::new(crate::chm::ChmTable::new())),
+            ..Self::default()
+        }
+    }
+
+    /// `new ConcurrentHashMap<>(initialCapacity)`.
+    #[must_use]
+    pub fn concurrent_with_capacity(capacity: usize) -> Self {
+        Self {
+            concurrent: Some(Box::new(crate::chm::ChmTable::with_capacity(capacity))),
+            ..Self::default()
+        }
+    }
+
+    /// `new ConcurrentHashMap<>(map)`: presized for the source before it is
+    /// copied in.
+    #[must_use]
+    pub fn concurrent_for_copy(size: usize) -> Self {
+        let mut table = crate::chm::ChmTable::for_copy();
+        table.presize(size);
+        Self {
+            concurrent: Some(Box::new(table)),
+            ..Self::default()
+        }
+    }
+
+    /// Whether this is a `ConcurrentHashMap`.
+    #[must_use]
+    pub fn is_concurrent(&self) -> bool {
+        self.concurrent.is_some()
+    }
+
+    /// `putAll`'s presizing, for a `ConcurrentHashMap` (a no-op otherwise).
+    pub fn presize(&mut self, size: usize) {
+        if let Some(table) = &mut self.concurrent {
+            table.presize(size);
+            self.order.take();
+        }
+    }
+
+    /// Whether this map refuses a null key or value: a `Hashtable` and a
+    /// `ConcurrentHashMap` both do, everywhere a key or value is handed in.
+    #[must_use]
+    pub fn refuses_nulls(&self) -> bool {
+        self.hashtable || self.concurrent.is_some()
+    }
+
+    /// A `ConcurrentHashMap` cursor's first node: `(id, bin)`.
+    #[must_use]
+    pub fn chm_first(&self) -> Option<(u64, usize)> {
+        self.concurrent.as_ref()?.first_from(0)
+    }
+
+    /// The node a `ConcurrentHashMap` cursor reaches after `id`.
+    #[must_use]
+    pub fn chm_successor(&self, id: u64, bin: usize) -> Option<(u64, usize)> {
+        self.concurrent.as_ref()?.successor(id, bin)
+    }
+
+    /// A node's key and value — a live one's current value, or a removed
+    /// one's last.
+    #[must_use]
+    pub fn chm_node(&self, id: u64) -> Option<(JValue, JValue)> {
+        if let Some(entry) = self.entries.iter().find(|entry| entry.id == id) {
+            return Some((entry.key, entry.value));
+        }
+        self.ghosts.get(&id).copied()
+    }
+
+    /// The storage index of a LIVE node.
+    #[must_use]
+    pub fn chm_index(&self, id: u64) -> Option<usize> {
+        self.entries.iter().position(|entry| entry.id == id)
     }
 
     /// Whether this map iterates a `Hashtable`'s way.
@@ -230,6 +320,22 @@ impl JavaHashMap {
     }
 
     fn insert_with_seq(&mut self, hash: i32, key: JValue, value: JValue, seq: i64) {
+        self.next_id += 1;
+        let id = self.next_id;
+        if let Some(table) = &mut self.concurrent {
+            // The compute family appends at the TAIL here, like `put`.
+            self.index.entry(hash).or_default().push(self.entries.len());
+            self.entries.push(Entry {
+                key,
+                hash,
+                value,
+                seq,
+                id,
+            });
+            table.insert(id, hash, self.entries.len());
+            self.order.take();
+            return;
+        }
         if self.table_len == 0 {
             self.table_len = if self.threshold == 0 {
                 DEFAULT_CAPACITY
@@ -244,6 +350,7 @@ impl JavaHashMap {
             hash,
             value,
             seq,
+            id,
         });
 
         // `treeifyBin`: a bin this long in a table this small makes Java grow
@@ -284,6 +391,10 @@ impl JavaHashMap {
     /// remains is unchanged.
     pub fn remove_at(&mut self, at: usize) -> JValue {
         let removed = self.entries.remove(at);
+        if let Some(table) = &mut self.concurrent {
+            table.remove(removed.id);
+            self.ghosts.insert(removed.id, (removed.key, removed.value));
+        }
         // Every later entry shifted down one, and this position is gone.
         for positions in self.index.values_mut() {
             positions.retain(|position| *position != at);
@@ -299,6 +410,12 @@ impl JavaHashMap {
     }
 
     pub fn clear(&mut self) {
+        if let Some(table) = &mut self.concurrent {
+            table.clear();
+            for entry in &self.entries {
+                self.ghosts.insert(entry.id, (entry.key, entry.value));
+            }
+        }
         self.entries.clear();
         self.index.clear();
         self.order.take();
@@ -312,6 +429,20 @@ impl JavaHashMap {
             // is exactly the order `entries` is already in.
             if self.linked {
                 return (0..self.entries.len()).collect();
+            }
+            // A `ConcurrentHashMap` walks the chains it really has.
+            if let Some(table) = &self.concurrent {
+                let position: HashMap<u64, usize> = self
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .map(|(at, entry)| (entry.id, at))
+                    .collect();
+                return table
+                    .order()
+                    .into_iter()
+                    .filter_map(|id| position.get(&id).copied())
+                    .collect();
             }
             // A `Hashtable` walks its buckets from the LAST down, and each
             // chain newest first — the opposite of a `HashMap` on both counts.
@@ -400,6 +531,10 @@ impl JavaHashMap {
         for entry in &self.entries {
             crate::value::visit_value(entry.key, visit);
             crate::value::visit_value(entry.value, visit);
+        }
+        for (key, value) in self.ghosts.values() {
+            crate::value::visit_value(*key, visit);
+            crate::value::visit_value(*value, visit);
         }
     }
 

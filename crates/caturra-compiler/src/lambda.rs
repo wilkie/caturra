@@ -678,7 +678,7 @@ fn static_method_names(
 /// gets `String`: the functional interface supplies the element type with its
 /// type arguments intact, and the bare name would be the raw type, whose every
 /// method answers `Object`.
-const LIBRARY_CONTAINERS: [&str; 19] = [
+const LIBRARY_CONTAINERS: [&str; 20] = [
     "ArrayList",
     "Vector",
     "Hashtable",
@@ -693,6 +693,7 @@ const LIBRARY_CONTAINERS: [&str; 19] = [
     "Map",
     "HashMap",
     "LinkedHashMap",
+    "ConcurrentHashMap",
     "TreeMap",
     "Queue",
     "Deque",
@@ -3777,10 +3778,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                         // refused as "wrong number of type arguments;
                         // required 2".
                         let one_argument = LIBRARY_CONTAINERS.contains(&base.as_str())
-                            && !matches!(
-                                base.as_str(),
-                                "Map" | "HashMap" | "LinkedHashMap" | "TreeMap" | "Hashtable"
-                            );
+                            && !is_map_class(base.as_str());
                         if one_argument {
                             // A container holds REFERENCES, so a primitive
                             // stream's element is the wrapper: an
@@ -5537,6 +5535,8 @@ fn is_map_class(simple: &str) -> bool {
         "Map"
             | "HashMap"
             | "LinkedHashMap"
+            | "ConcurrentHashMap"
+            | "ConcurrentMap"
             | "Hashtable"
             | "TreeMap"
             | "SortedMap"
@@ -7158,6 +7158,7 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             | "Map"
             | "HashMap"
             | "LinkedHashMap"
+            | "ConcurrentHashMap"
             | "Hashtable"
             | "TreeMap"
             | "SortedMap"
@@ -7268,7 +7269,7 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
             _ => None,
         },
-        ("Map" | "HashMap" | "Hashtable" | "TreeMap", "get", 1) => match receiver {
+        (map, "get", 1) if is_map_class(map) => match receiver {
             TypeRef::Generic { args, .. } if args.len() == 2 => Some(args[1].clone()),
             _ => None,
         },
@@ -7430,17 +7431,7 @@ fn map_half(receiver: &TypeRef, at: usize) -> Option<TypeRef> {
     match receiver {
         TypeRef::Generic { base, args }
             if args.len() == 2
-                && matches!(
-                    simple_base(base),
-                    "Map"
-                        | "HashMap"
-                        | "Hashtable"
-                        | "LinkedHashMap"
-                        | "TreeMap"
-                        | "SortedMap"
-                        | "NavigableMap"
-                        | "EnumMap"
-                ) =>
+                && is_map_class(simple_base(base)) =>
         {
             args.get(at).cloned()
         }
@@ -8773,12 +8764,11 @@ fn list_elem_type(receiver: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     {
         let read = match (simple_base(&base), method.as_str(), written.len()) {
             (
-                "Map" | "HashMap" | "Hashtable" | "LinkedHashMap" | "TreeMap" | "SortedMap"
-                | "NavigableMap" | "EnumMap",
+                map,
                 "get" | "getOrDefault" | "remove" | "put" | "putIfAbsent" | "computeIfAbsent"
                 | "compute" | "computeIfPresent" | "merge" | "replace",
                 2,
-            ) => written.get(1),
+            ) if is_map_class(map) => written.get(1),
             (
                 _,
                 "get" | "getFirst" | "getLast" | "peek" | "peekFirst" | "peekLast" | "poll"

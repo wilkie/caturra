@@ -3431,7 +3431,10 @@ impl<'run> Interpreter<'run> {
         // ClassCastException — or, for a TreeMap receiver, silently nothing.
         if matches!(
             target_class,
-            "java/util/HashMap" | "java/util/LinkedHashMap" | "java/util/Hashtable"
+            "java/util/HashMap"
+                | "java/util/LinkedHashMap"
+                | "java/util/Hashtable"
+                | "java/util/concurrent/ConcurrentHashMap"
         ) && descriptor == "(Ljava/util/Map;)V"
         {
             use crate::value::HeapObject;
@@ -3454,6 +3457,8 @@ impl<'run> Interpreter<'run> {
                 // HashMap that later claims to be one.
                 *map = if target_class == "java/util/Hashtable" {
                     crate::map::JavaHashMap::hashtable(std::cmp::max(entries.len() * 2, 11))
+                } else if target_class == "java/util/concurrent/ConcurrentHashMap" {
+                    crate::map::JavaHashMap::concurrent_for_copy(entries.len())
                 } else {
                     crate::map::JavaHashMap::with_capacity_hint(hint).as_linked(linked)
                 };
@@ -3490,11 +3495,14 @@ impl<'run> Interpreter<'run> {
         if target_class == "java/lang/StringBuffer" {
             self.heap.set_view_class(receiver, "java/lang/StringBuffer");
         }
-        if matches!(target_class, "java/util/Vector" | "java/util/Hashtable") {
-            let name = if target_class == "java/util/Vector" {
-                "java/util/Vector"
-            } else {
-                "java/util/Hashtable"
+        if matches!(
+            target_class,
+            "java/util/Vector" | "java/util/Hashtable" | "java/util/concurrent/ConcurrentHashMap"
+        ) {
+            let name = match target_class {
+                "java/util/Vector" => "java/util/Vector",
+                "java/util/Hashtable" => "java/util/Hashtable",
+                _ => "java/util/concurrent/ConcurrentHashMap",
             };
             self.heap.set_view_class(receiver, name);
         }
@@ -9128,8 +9136,11 @@ impl<'run> Interpreter<'run> {
         // while testing its value outright. Every method below would
         // otherwise have STORED one, and a program that meets the JDK's
         // refusal here is meeting the reason `HashMap` exists.
+        // A `ConcurrentHashMap` refuses exactly the same nulls, for a reason of
+        // its own: a null answer from `get` could not tell "absent" from
+        // "mapped to null" while another thread was changing the map.
         if let Some(HeapObject::HashMap(map)) = self.heap.get(receiver)
-            && map.is_hashtable()
+            && map.refuses_nulls()
         {
             let null_key = matches!(
                 (method_name, args),
@@ -9153,6 +9164,7 @@ impl<'run> Interpreter<'run> {
                 ("contains" | "containsValue", [JValue::NULL])
                     | ("put" | "putIfAbsent", [_, JValue::NULL])
                     | ("replace", [_, JValue::NULL] | [_, _, JValue::NULL])
+                    | ("merge", [_, JValue::NULL, _])
             );
             if null_key || null_value {
                 return Err(VmError::UncaughtException(String::from(
@@ -9203,6 +9215,10 @@ impl<'run> Interpreter<'run> {
                 list: false,
                 descending: false,
             });
+            // A cursor over a `ConcurrentHashMap` view is weakly consistent.
+            if let Some((map, _)) = self.chm_view(receiver) {
+                self.heap.chm_cursor_start(u64::from(iterator), map);
+            }
             return Ok(Answered::Value(JValue::Ref(Some(iterator))));
         }
         match self.heap.get(receiver) {
@@ -9333,6 +9349,8 @@ impl<'run> Interpreter<'run> {
 
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(receiver)).unwrap_or(i32::MAX)),
+            // A `ConcurrentHashMap`'s size as a long.
+            ("mappingCount", []) => JValue::Long(i64::try_from(self.map_len(receiver)).unwrap_or(0)),
             ("isEmpty", []) => JValue::Int(i32::from(self.map_len(receiver) == 0)),
             ("clear", []) => {
                 match self.heap.get_mut(receiver) {
@@ -9466,6 +9484,11 @@ impl<'run> Interpreter<'run> {
                     list: false,
                     descending: false,
                 });
+                // ...and a `ConcurrentHashMap`'s is its weakly consistent
+                // cursor.
+                if let Some((map, _)) = self.chm_view(view) {
+                    self.heap.chm_cursor_start(u64::from(cursor), map);
+                }
                 JValue::Ref(Some(cursor))
             }
             ("get", [key]) => self.map_entry_value(receiver, *key)?,
@@ -9657,6 +9680,16 @@ impl<'run> Interpreter<'run> {
         args: &[JValue],
     ) -> Result<Answered, VmError> {
         use crate::value::HeapObject;
+        // A `ConcurrentHashMap.newKeySet()` set refuses a null element, as its
+        // map refuses a null key.
+        if matches!(method_name, "add" | "contains" | "remove")
+            && matches!(args, [JValue::NULL])
+            && matches!(self.heap.get(receiver), Some(HeapObject::HashSet(table)) if table.refuses_nulls())
+        {
+            return Err(VmError::UncaughtException(String::from(
+                "java.lang.NullPointerException",
+            )));
+        }
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(receiver)).unwrap_or(i32::MAX)),
             ("isEmpty", []) => JValue::Int(i32::from(self.map_len(receiver) == 0)),
@@ -14862,7 +14895,7 @@ impl<'run> Interpreter<'run> {
             ("setValue", [JValue::NULL])
                 if matches!(
                     self.heap.get(map),
-                    Some(crate::value::HeapObject::HashMap(table)) if table.is_hashtable()
+                    Some(crate::value::HeapObject::HashMap(table)) if table.refuses_nulls()
                 ) =>
             {
                 return Err(VmError::UncaughtException(String::from(
@@ -17201,6 +17234,52 @@ impl<'run> Interpreter<'run> {
         // loop starts: the collection's MODIFICATION COUNT, a JDK iterator's
         // `expectedModCount`. It used to be the SIZE, so a loop body that
         // removed one element and added another walked on where a JDK throws.
+        // A view of a `ConcurrentHashMap` is walked by a WEAKLY CONSISTENT
+        // cursor instead: the loop's stamp is a token naming it, the element
+        // fetch steps it, and the loop ends when it has nothing next — never
+        // a ConcurrentModificationException.
+        if let Some((map, kind)) = self.chm_view(receiver) {
+            match (method_name, args.as_slice()) {
+                ("__modCount", []) => {
+                    let token = self.heap.chm_loop_token(map);
+                    frame.stack.push(JValue::Int(token));
+                    return Ok(None);
+                }
+                ("__hasNextIndexed", [_, _, JValue::Int(token)])
+                    if crate::value::is_chm_token(*token) =>
+                {
+                    let key = crate::value::chm_token_key(*token);
+                    let more = self.heap.chm_cursor(key).is_some_and(|cursor| cursor.next.is_some());
+                    if !more {
+                        self.heap.chm_cursor_end(key);
+                    }
+                    frame.stack.push(JValue::Int(i32::from(more)));
+                    return Ok(None);
+                }
+                ("__getChecked" | "__getBoxedChecked", [_, JValue::Int(token)])
+                    if crate::value::is_chm_token(*token) =>
+                {
+                    let key = crate::value::chm_token_key(*token);
+                    let Some((map, id)) = self.heap.chm_cursor_advance(key) else {
+                        return Err(VmError::UncaughtException(String::from(
+                            "java.util.NoSuchElementException",
+                        )));
+                    };
+                    let element = self.chm_element(map, id, kind);
+                    frame.stack.push(element);
+                    return Ok(None);
+                }
+                _ => {}
+            }
+        }
+        // A loop over anything else is bounded as it always was: `index !=
+        // size`, the size taken when the loop began.
+        if method_name == "__hasNextIndexed"
+            && let [JValue::Int(index), JValue::Int(bound), _] = args.as_slice()
+        {
+            frame.stack.push(JValue::Int(i32::from(index != bound)));
+            return Ok(None);
+        }
         if method_name == "__modCount" && args.is_empty() {
             let stamp = intrinsics::mod_stamp(&self.heap, receiver);
             frame
@@ -18842,6 +18921,52 @@ impl<'run> Interpreter<'run> {
     /// Both walk the bucket array from index 0 upward, where the `Enumerator`
     /// behind `keys()`, `toString`, the views and the streams walks it
     /// DOWNWARD. Two orders, one table, and a program sees both.
+    /// The `ConcurrentHashMap` a view (or `keys()`/`elements()` cursor
+    /// source) reads, and which half of it.
+    fn chm_view(&self, receiver: HeapRef) -> Option<(HeapRef, MapViewKind)> {
+        // A `newKeySet()` set IS a table of keys.
+        if let Some(crate::value::HeapObject::HashSet(table)) = self.heap.get(receiver)
+            && table.is_concurrent()
+        {
+            return Some((receiver, MapViewKind::Keys));
+        }
+        let Some(crate::value::HeapObject::MapView { map, kind, .. }) = self.heap.get(receiver)
+        else {
+            return None;
+        };
+        matches!(
+            self.heap.get(*map),
+            Some(crate::value::HeapObject::HashMap(table)) if table.is_concurrent()
+        )
+        .then_some((*map, *kind))
+    }
+
+    /// What a `ConcurrentHashMap` cursor hands out for a node: its key, its
+    /// value, or an entry — a live entry, read through the map, as the other
+    /// maps' are.
+    fn chm_element(&mut self, map: HeapRef, id: u64, kind: MapViewKind) -> JValue {
+        let Some(
+            crate::value::HeapObject::HashMap(table) | crate::value::HeapObject::HashSet(table),
+        ) = self.heap.get(map)
+        else {
+            return JValue::NULL;
+        };
+        let Some((key, value)) = table.chm_node(id) else {
+            return JValue::NULL;
+        };
+        match kind {
+            MapViewKind::Keys => key,
+            MapViewKind::Values => value,
+            MapViewKind::Entries => JValue::Ref(Some(self.heap.alloc(
+                crate::value::HeapObject::MapEntry {
+                    map,
+                    key,
+                    read_only: false,
+                },
+            ))),
+        }
+    }
+
     fn map_entries_in_action_order(&mut self, receiver: HeapRef) -> Vec<(JValue, JValue)> {
         if let Some(crate::value::HeapObject::HashMap(map)) = self.heap.get(receiver)
             && map.is_hashtable()
@@ -22967,6 +23092,7 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
         // A `Hashtable` extends the abstract `Dictionary` a `Map` replaced —
         // the one place that class is still visible.
         ("java/util/Hashtable", "java/util/Dictionary"),
+        ("java/util/concurrent/ConcurrentHashMap", "java/util/AbstractMap"),
         // A `FileReader` extends `InputStreamReader`, not `Reader` — the one
         // place that class shows in an ordinary program.
         ("java/io/FileReader", "java/io/InputStreamReader"),
@@ -23555,6 +23681,9 @@ fn library_direct_interfaces(internal: &str) -> &'static [&'static str] {
             "java/lang/Cloneable",
             "java/io/Serializable",
         ],
+        "java/util/concurrent/ConcurrentHashMap" => {
+            &["java/util/concurrent/ConcurrentMap", "java/io/Serializable"]
+        }
         "java/util/LinkedHashMap" => &["java/util/Map"],
         "java/util/TreeMap" => &[
             "java/util/NavigableMap",
@@ -23766,6 +23895,14 @@ fn library_faces(class: &str) -> &'static [&'static str] {
         // `Collection` and not a `Set` — the same reading, one wrapper out.
         | "java/util/Collections$UnmodifiableCollection" => &["java/util/Collection"],
         "java/util/HashMap" | "java/util/Hashtable" => &["java/util/Map", "java/lang/Cloneable"],
+        // A `ConcurrentHashMap` is a `ConcurrentMap` — and so a `Map` — and
+        // not `Cloneable`.
+        "java/util/concurrent/ConcurrentHashMap" => {
+            &["java/util/concurrent/ConcurrentMap", "java/util/Map"]
+        }
+        "java/util/concurrent/ConcurrentHashMap$KeySetView"
+        | "java/util/concurrent/ConcurrentHashMap$EntrySetView" => SET,
+        "java/util/concurrent/ConcurrentHashMap$ValuesView" => &["java/util/Collection"],
         // An `Enumeration` here IS a cursor, so it answers to both names —
         // and so do the cursor CLASSES a legacy collection's `elements()` and
         // `keys()` hand back, which is the name such a value actually wears.
@@ -24221,6 +24358,18 @@ fn map_member_class_of(heap: &Heap, map: HeapRef, kind: Option<MapViewKind>) -> 
             None => "java/util/Collections$UnmodifiableMap$UnmodifiableEntrySet$UnmodifiableEntry",
         });
     }
+    // A `ConcurrentHashMap`'s three views and its entry are its own nested
+    // classes.
+    if let Some(HeapObject::HashMap(table)) = heap.get(map)
+        && table.is_concurrent()
+    {
+        return String::from(match kind {
+            Some(MapViewKind::Keys) => "java/util/concurrent/ConcurrentHashMap$KeySetView",
+            Some(MapViewKind::Values) => "java/util/concurrent/ConcurrentHashMap$ValuesView",
+            Some(MapViewKind::Entries) => "java/util/concurrent/ConcurrentHashMap$EntrySetView",
+            None => "java/util/concurrent/ConcurrentHashMap$MapEntry",
+        });
+    }
     let (owner, linked) = match heap.get(map) {
         Some(HeapObject::TreeMap { .. }) => ("TreeMap", false),
         Some(HeapObject::HashMap(entries) | HeapObject::HashSet(entries)) => {
@@ -24482,6 +24631,13 @@ fn cursor_class_name_of(
                 ),
                 _ => (false, false, false, false),
             };
+            if matches!(heap.get(*map), Some(H::HashMap(table)) if table.is_concurrent()) {
+                return match kind {
+                    K::Keys => "java/util/concurrent/ConcurrentHashMap$KeyIterator",
+                    K::Values => "java/util/concurrent/ConcurrentHashMap$ValueIterator",
+                    K::Entries => "java/util/concurrent/ConcurrentHashMap$EntryIterator",
+                };
+            }
             if hashtable && matches!(writes, W::Enumerator) {
                 return if empty {
                     "java/util/Collections$EmptyEnumeration"
