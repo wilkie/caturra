@@ -6734,19 +6734,23 @@ fn stage6_compile_errors_match_javac_wording() {
             // `compare(Object,Object)`.
             "does not override abstract method compare(String,String) in Comparator",
         ),
-        // `Thread` is still refused — a program here runs on one thread, in
-        // one WASM instance — though the `Runnable` beside it is supported now.
+        // A `Thread` is an ordinary value now (specs/CONCURRENCY.md, phase 0);
+        // what is still refused is STARTING a second one, and by name. This
+        // case pinned `new Thread()` itself as refused — a limitation recorded
+        // as a requirement — and fails the moment the limit is lifted.
         (
-            "class M { static void f() { Thread t = new Thread(); } }",
-            "java.lang.Thread is not supported by caturra",
+            "class M { static void f() { new Thread(() -> {}).start(); } }",
+            "Thread.start exists in Java, but caturra does not run a second thread yet",
         ),
         // A type argument caturra models as a variable AND as an element: a
         // `List<Scanner>` and a `Set<File>` are ordinary programs now (each
         // rides interned, as a nested collection does), so what is left to
         // pin here is the message for a type caturra models NOWHERE.
+        // (It was `List<Thread>` until `Thread` was modelled; `ThreadGroup`
+        // still is not.)
         (
-            "import java.util.*; class M { static void f() { List<Thread> l; } }",
-            "java.lang.Thread is not supported by caturra",
+            "import java.util.*; class M { static void f() { List<ThreadGroup> l; } }",
+            "java.lang.ThreadGroup is not supported by caturra",
         ),
         // JLS §5.5: a reference cast needs one type to be a subtype of the
         // other, and `String` is final — so only a supertype casts down to it.

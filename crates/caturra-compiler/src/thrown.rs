@@ -745,10 +745,20 @@ fn callee_throws_named(
 ) -> ThrownSet {
     let names: Vec<String> = ctx.table.declared_throws(class, method, arity).to_vec();
     let mut out = ThrownSet::default();
-    for name in names {
-        match resolve_exc(&name, ctx.table) {
+    for name in &names {
+        match resolve_exc(name, ctx.table) {
             Some(e) => out.push(e),
             None => out.unknown = true,
+        }
+    }
+    // A BUNDLED class stands for a JDK one, and a method it leaves out on
+    // purpose (refused by name) still throws what the JDK declares — so the
+    // `catch` around `thread.join()` stays legal while the call itself is the
+    // one error reported.
+    if names.is_empty() && ctx.table.is_bundled_class(class) {
+        let simple = class.rsplit('/').next().unwrap_or(class);
+        for internal in jdk_declared_throws(simple, method) {
+            out.push(Exc::Lib(internal));
         }
     }
     ctx.report_escapes(&out, handlers, span);
@@ -945,6 +955,25 @@ fn wraps_a_writer(args: &[Expr], ctx: &Ctx) -> bool {
     }
 }
 
+/// The checked exceptions a JDK DECLARES for a library method — a model of
+/// Java, not of what caturra runs. That distinction is the point: a call
+/// caturra refuses (`thread.join()`, until the scheduler of
+/// specs/CONCURRENCY.md exists) still throws in Java, and the `catch` around
+/// it is still legal. Without the entry, the try was "exception
+/// InterruptedException is never thrown", which blames the one part of the
+/// program that is right.
+fn jdk_declared_throws(class: &str, method: &str) -> &'static [&'static str] {
+    match (class, method) {
+        // Every modeled Files operation that touches content throws
+        // IOException; the pure predicates do not.
+        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => &[],
+        ("Files", _) => &["java/io/IOException"],
+        ("Class", "forName") => &["java/lang/ClassNotFoundException"],
+        ("Thread", "sleep" | "join") => &["java/lang/InterruptedException"],
+        _ => &[],
+    }
+}
+
 /// Checked exceptions of modeled library STATICS.
 fn library_static_throws(
     class: &str,
@@ -953,22 +982,7 @@ fn library_static_throws(
     handlers: &[Vec<Exc>],
     ctx: &mut Ctx,
 ) -> ThrownSet {
-    let thrown: &[&'static str] = match (class, method) {
-        // Every modeled Files operation that touches content throws
-        // IOException; the pure predicates do not.
-        ("Files", "exists" | "notExists" | "isDirectory" | "isRegularFile") => &[],
-        ("Files", _) => &["java/io/IOException"],
-        ("Class", "forName") => &["java/lang/ClassNotFoundException"],
-        // `Thread.sleep` throws `InterruptedException` in Java, and this table
-        // is a model of JAVA, not of what caturra runs: `java.lang.Thread` is
-        // refused (one thread, so a sleep would be a lie), and the refusal
-        // says so — but only if the CATCH clause around it is legal first.
-        // Without this entry the try was "exception InterruptedException is
-        // never thrown", which blames the one part of the program that is
-        // right.
-        ("Thread", "sleep" | "join") => &["java/lang/InterruptedException"],
-        _ => &[],
-    };
+    let thrown = jdk_declared_throws(class, method);
     let mut out = ThrownSet::default();
     for internal in thrown {
         out.push(Exc::Lib(internal));

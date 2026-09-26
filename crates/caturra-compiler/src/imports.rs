@@ -301,6 +301,8 @@ const JAVA_UTIL_STREAM: &[&str] = &[
 const JAVA_LANG: &[&str] = &[
     "String",
     "Object",
+    // Bundled Java (specs/CONCURRENCY.md, phase 0).
+    "Thread",
     "System",
     "Math",
     "Integer",
@@ -836,13 +838,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
     // 'Thread'" about a class every Java programmer knows reads as our bug.
     (
         "java.lang",
-        &[
-            "StrictMath",
-            "Thread",
-            "ThreadLocal",
-            "Process",
-            "ProcessBuilder",
-        ],
+        &["StrictMath", "ThreadLocal", "Process", "ProcessBuilder"],
     ),
 ];
 
@@ -1209,6 +1205,10 @@ const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[
     // one in a field has to be able to NAME it.
     ("Base64", "Encoder", "Base64.Encoder"),
     ("Base64", "Decoder", "Base64.Decoder"),
+    // A thread's lifecycle state. The bundled `Thread` keeps it at the top
+    // level under a reserved name, since a nested class would be hoisted
+    // under `State` — a name programs give their own classes.
+    ("Thread", "State", "__ThreadState"),
 ];
 
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the

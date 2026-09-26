@@ -199,13 +199,16 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
         "java/util/IllegalFormatWidthException",
         "java/util/IllegalFormatException",
     ),
-    // A checked exception a program NAMES far more often than it can be
-    // thrown here: every `Thread.sleep` is written inside a `catch
-    // (InterruptedException e)`. `java.lang.Thread` itself is refused (caturra
-    // runs on one thread), and the refusal says so — but with this class
-    // missing from the table the catch clause failed FIRST, with "cannot find
-    // symbol", which names the wrong problem.
+    // What `Thread.sleep` throws when the thread's interrupt flag is set —
+    // which a program can do to its own thread (`currentThread().interrupt()`)
+    // even before there is a second one to do it (specs/CONCURRENCY.md).
     ("java/lang/InterruptedException", "java/lang/Exception"),
+    // `setDaemon` on a thread that is already running, and (phase 1) a second
+    // `start()`. A JDK's carries no message either way.
+    (
+        "java/lang/IllegalThreadStateException",
+        "java/lang/IllegalArgumentException",
+    ),
     ("java/io/IOException", "java/lang/Exception"),
     ("java/io/FileNotFoundException", "java/io/IOException"),
     ("java/io/UncheckedIOException", "java/lang/RuntimeException"),

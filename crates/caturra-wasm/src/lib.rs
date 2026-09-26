@@ -362,6 +362,29 @@ struct JsConsole<'a> {
     /// (the JS console streams, so capture needs its own buffer). `None`
     /// when not capturing.
     capture: Option<Vec<String>>,
+    /// A private shared cell `Thread.sleep` parks on (`Atomics.wait` with a
+    /// timeout). Made on the first sleep; `None` until then.
+    sleep_cell: Option<js_sys::Int32Array>,
+}
+
+impl JsConsole<'_> {
+    /// Park for up to `millis` on the shared cell. `false` when the host
+    /// cannot: `SharedArrayBuffer` exists only on a cross-origin isolated
+    /// page, and a browser refuses `Atomics.wait` on its main thread (an
+    /// embedder that runs the session there). Nobody ever notifies the cell,
+    /// so the wait always ends by timing out.
+    fn park(&mut self, millis: u32) -> bool {
+        let available =
+            js_sys::Reflect::get(&js_sys::global(), &JsValue::from_str("SharedArrayBuffer"))
+                .is_ok_and(|constructor| constructor.is_function());
+        if !available {
+            return false;
+        }
+        let cell = self
+            .sleep_cell
+            .get_or_insert_with(|| js_sys::Int32Array::new(&js_sys::SharedArrayBuffer::new(4)));
+        js_sys::Atomics::wait_with_timeout(cell, 0, 0, f64::from(millis)).is_ok()
+    }
 }
 
 impl ConsoleIo for JsConsole<'_> {
@@ -379,6 +402,23 @@ impl ConsoleIo for JsConsole<'_> {
         #[allow(clippy::cast_possible_truncation)]
         let minutes = js_sys::Date::new_0().get_timezone_offset() as i32;
         -minutes * 60
+    }
+
+    /// `Thread.sleep` really waits here: the engine runs in a worker, which
+    /// has nothing else to do, so it parks — or, where it cannot park, watches
+    /// the clock. Either way the page stays responsive, and Stop terminates
+    /// the worker as it always has. Reports what actually passed, so a wait
+    /// that ends early is simply asked for the rest.
+    fn wait_millis(&mut self, millis: u32) -> u32 {
+        let start = js_sys::Date::now();
+        let wanted = f64::from(millis);
+        if !self.park(millis) {
+            while js_sys::Date::now() - start < wanted {}
+        }
+        let elapsed = (js_sys::Date::now() - start).clamp(0.0, wanted);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let elapsed = elapsed as u32;
+        elapsed
     }
 
     fn stdout(&mut self, bytes: &[u8]) {
@@ -554,6 +594,7 @@ impl JvmSession {
             await_ui: await_ui.as_ref(),
             dialog_ui: dialog_ui.as_ref(),
             capture: None,
+            sleep_cell: None,
         };
         // Real entropy for Math.random(); tests off-browser use the
         // deterministic default seed instead.
@@ -623,6 +664,7 @@ impl JvmSession {
             await_ui: await_ui.as_ref(),
             dialog_ui: dialog_ui.as_ref(),
             capture: None,
+            sleep_cell: None,
         };
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let seed = (js_sys::Math::random() * 9_007_199_254_740_992.0) as u64;

@@ -1,6 +1,6 @@
 # CONCURRENCY — Java threads on a single-threaded engine
 
-- **Status:** proposed
+- **Status:** accepted — phase 0 implemented 2026-09-25; phases 1–3 pending
 - **Date:** 2026-09-25
 - **Refines:** [EXECUTION.md](EXECUTION.md), [RUNTIME.md](RUNTIME.md)
 - **Amends:** the "Threads" non-goal in [SCOPE.md](SCOPE.md)
@@ -75,7 +75,7 @@ becomes a real monitor. `Thread.sleep` really sleeps.**
   need are interleaving, not parallelism.
 - **Memory-model effects.** With one execution thread every write is visible
   to every thread the instant it happens: the program runs sequentially
-  consistent, which is a *legal* JVM execution. `volatile` is accepted and
+  consistent, which is a _legal_ JVM execution. `volatile` is accepted and
   changes nothing. A program cannot observe a stale read here; no correct
   program depends on one.
 - **Priorities.** `setPriority` is accepted and ignored; the JDK documents that
@@ -117,7 +117,7 @@ The interpreter keeps `threads: Vec<JavaThread>` and `current: usize`. The
 fields it has today for one run — `frames`, `current_location` — become the
 current thread's, swapped in and out at a switch. `suspended_runs` and
 `nested_frame_base` (the native re-entry stack) stay on the interpreter,
-because they describe the *host* stack, which only the current thread can be
+because they describe the _host_ stack, which only the current thread can be
 on; a switch is only permitted when `suspended_runs` is empty, so a parked
 thread never has any.
 
@@ -156,7 +156,7 @@ for a given program and input. Two consequences, both intended:
   so that it does; it is a tuning constant, recorded with its measurement.
 
 A JDK's interleaving is not reproducible, and no pin should pretend it is:
-the pins below compare only what a JDK's output *determines* (see Testing). A
+the pins below compare only what a JDK's output _determines_ (see Testing). A
 seeded jitter on the quantum is a possible later option for a "show me a
 different interleaving" button; it is not part of this design.
 
@@ -217,7 +217,7 @@ caturra: every thread is blocked and none is waiting on time
 ```
 
 — a thread dump, which is what a person debugging the hang on a JDK would
-have to produce by hand. This is a divergence from a JDK of the *stricter*
+have to produce by hand. This is a divergence from a JDK of the _stricter_
 kind (a program that hangs there is refused here), and it is recorded in
 LANGUAGE.md's divergence list with its pin.
 
@@ -272,7 +272,7 @@ called during rendering, a Swing event handler.
   This is honest in the way every caturra refusal is: it names the exact
   limit, and the program can be rewritten around it. It is expected to be
   rare — a `join` inside a `forEach` lambda is unusual code — and a Swing
-  handler that *sleeps* (the common case, to animate) is unaffected.
+  handler that _sleeps_ (the common case, to animate) is unaffected.
 
 The boundary is not permanent. Two routes would remove it, both out of scope
 here: making the twenty-two re-entry sites resumable (each becomes a state
@@ -312,7 +312,7 @@ later JDKs added the words).
   `Exception in thread "Thread-0" java.lang.IllegalStateException: …` and the
   trace, the thread ends, and the others continue — the default uncaught
   handler. A JDK's trace ends in `at java.base/java.lang.Thread.run(Thread.
-  java:829)` beneath the program's own frames; the thread's bottom frame here
+java:829)` beneath the program's own frames; the thread's bottom frame here
   is that call, so the line is a real frame's, not a decoration. The process
   still exits 0 (measured), and a daemon thread still sleeping does not keep
   it alive. `main`'s uncaught exception keeps its current shape; whether the
@@ -349,7 +349,18 @@ whichever thread reaches it, and the snapshot says which.
 `sleep(ms, nanos)`, `currentThread()`, `getName`/`setName`, `getId`,
 `isInterrupted`/`interrupted`/`interrupt` (on `main`), `yield`, `Thread` as a
 type. `sleep` waits for real through `wait_millis`. No scheduler yet; the
-refusal for `start()` names the phase. *Small: a day.*
+refusal for `start()` names the phase. _Small: a day._
+
+_Done (2026-09-25)._ As built: `Thread` is bundled Java
+(`stdlib/thread.java`) with `Thread.State` kept at the top level as
+`__ThreadState` (a nested class would be hoisted as `State` and collide with
+programs' own); `sleep` reaches the host through the reserved
+`__System.__sleep`, in slices of at most 100 ms; the WASM console parks on
+`Atomics.wait` on a private shared cell, spinning on the clock where that is
+unavailable; `BufferedConsole` keeps the virtual clock. Constructing a thread,
+`run()`, priorities and daemon flags are in too, since none needs a second
+thread. Not yet: the debugger's pause is not polled during a long sleep (the
+slices are there for it).
 
 **Phase 1 — threads.** `new Thread(Runnable)`, `(Runnable, String)`,
 `(String)`, a subclass overriding `run`; `start`, `run`, `join`, `join(ms)`,
@@ -357,11 +368,11 @@ refusal for `start()` names the phase. *Small: a day.*
 (ignored), `interrupt` waking `sleep`/`join`/`wait`; `Object.wait/notify/
 notifyAll`; real monitors for `synchronized`; the uncaught handler's output;
 main-exits-last; the blocked-everywhere report; the nested-run refusal; the
-debugger's thread list; the virtual clock in tests. *The unit of work: the
+debugger's thread list; the virtual clock in tests. _The unit of work: the
 scheduler and parking are perhaps 800 lines, the monitors 300, the Thread
 class (bundled Java plus intrinsics) 400, the host hook 100, and the pins as
 many again. The risk is not size but the number of places that must agree —
-the same shape every unit in LANGUAGE.md has had.*
+the same shape every unit in LANGUAGE.md has had._
 
 **Phase 2 — `java.util.concurrent`, the course-sized part.** `Executors.
 newFixedThreadPool/newSingleThreadExecutor/newCachedThreadPool`,
@@ -413,7 +424,7 @@ student's animated Swing program actually is.
 
 ## Testing
 
-Differential pins compare what a JDK's output *determines*, never the
+Differential pins compare what a JDK's output _determines_, never the
 interleaving it happened to produce:
 
 - **Structure:** `start`/`join` ordering, results computed by joined threads,
@@ -421,7 +432,7 @@ interleaving it happened to produce:
   is forced (a bounded buffer of size one), a `CountDownLatch` release order.
 - **Time:** elapsed bounds — `sleep(100)` takes at least 100 ms by
   `nanoTime`, on both engines (real time on a JDK, virtual here).
-- **Races:** property pins — the unsynchronized counter ends *at or below*
+- **Races:** property pins — the unsynchronized counter ends _at or below_
   the total on both, and caturra's own result is stable run to run (its
   determinism is a promise worth pinning).
 - **Refusals:** the two stricter divergences, with their wording.

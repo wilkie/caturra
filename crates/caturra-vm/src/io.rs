@@ -23,6 +23,21 @@ pub trait ConsoleIo {
         0
     }
 
+    /// Wait up to `millis` milliseconds — what `Thread.sleep` asks of the
+    /// host — and return how many actually passed. A host may return early
+    /// (the VM asks again for the rest); it must not return MORE than it
+    /// waited, or a sleep would end before its time.
+    ///
+    /// The browser worker really waits (`Atomics.wait` with a timeout). A
+    /// host without a clock of its own passes the time instantly; one that
+    /// answers `now_millis` should move that clock by what it returns, so a
+    /// program that times its own sleep sees the pause it asked for — see
+    /// [`BufferedConsole`], whose clock is VIRTUAL for exactly that reason.
+    /// (See `specs/CONCURRENCY.md`, "The host contract".)
+    fn wait_millis(&mut self, millis: u32) -> u32 {
+        millis
+    }
+
     /// Write bytes to standard out.
     fn stdout(&mut self, bytes: &[u8]);
 
@@ -93,6 +108,11 @@ pub struct BufferedConsole {
     /// When `Some`, standard out is redirected into these per-call messages
     /// (`System.setOut` semantics for `SystemOutTestRunner`).
     capture: Option<Vec<String>>,
+    /// A VIRTUAL clock, in milliseconds from zero: `Thread.sleep` advances it
+    /// instantly and `currentTimeMillis`/`nanoTime` read it, so a sleeping
+    /// program runs in no time and every timing it measures is exact — the
+    /// same arrangement a fixed `Math.random` seed gives randomness.
+    clock_millis: i64,
 }
 
 impl BufferedConsole {
@@ -124,6 +144,15 @@ impl BufferedConsole {
 }
 
 impl ConsoleIo for BufferedConsole {
+    fn now_millis(&mut self) -> i64 {
+        self.clock_millis
+    }
+
+    fn wait_millis(&mut self, millis: u32) -> u32 {
+        self.clock_millis += i64::from(millis);
+        millis
+    }
+
     fn stdout(&mut self, bytes: &[u8]) {
         self.stdout.extend_from_slice(bytes);
     }

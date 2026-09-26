@@ -103,6 +103,9 @@ fn jdk_binary_name(simple: &str) -> Option<&'static str> {
     match simple {
         "Random" => Some("java/util/Random"),
         "ThreadLocalRandom" => Some("java/util/concurrent/ThreadLocalRandom"),
+        "Thread" => Some("java/lang/Thread"),
+        // `Thread.State`, which lives at the top level here (see thread.java).
+        "__ThreadState" => Some("java/lang/Thread$State"),
         "StringJoiner" => Some("java/util/StringJoiner"),
         _ => None,
     }
@@ -111,6 +114,10 @@ fn jdk_binary_name(simple: &str) -> Option<&'static str> {
 /// Bundled `java.util` helpers (`Random`, `Collections`), injected when a
 /// source references `Random`/`Collections`.
 const UTIL_LIB: &str = include_str!("stdlib/util.java");
+
+/// The bundled `java.lang.Thread` (specs/CONCURRENCY.md), injected when a
+/// source mentions `Thread`.
+const THREAD_LIB: &str = include_str!("stdlib/thread.java");
 
 /// The erased `__BiConsumer` target type of a `Map.forEach` lambda,
 /// injected when a source calls `forEach`.
@@ -715,6 +722,28 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         // an injected library needs — `new Random(1).ints(3, 0, 10)` was
         // "cannot find symbol: class __Supplier", about a class no program
         // mentions.
+        needs_function_lib = true;
+    }
+    // `java.lang.Thread`. Named by the word, and by nothing narrower: a
+    // `catch (InterruptedException e)` around a `sleep`, a subclass, a field
+    // of type `Thread` all need the class, and spelling `ThreadLocalRandom`
+    // costs only an unused class. A program's own `Thread` shadows it, as it
+    // shadows every bundled class.
+    if sources.iter().any(|s| s.text.contains("Thread"))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "Thread"))
+    {
+        let (tokens, _) = lexer::lex("<thread>", THREAD_LIB);
+        let (mut unit, mut errs) = parser::parse("<thread>", tokens);
+        compilation.diagnostics.append(&mut errs);
+        for class in &mut unit.classes {
+            if let Some(binary) = jdk_binary_name(&class.name) {
+                class.binary_name = Some(String::from(binary));
+            }
+        }
+        units.push((String::from("<thread>"), unit));
+        // It implements `Runnable`, which is the bundled `__Runnable`.
         needs_function_lib = true;
     }
     if (needs_function_lib

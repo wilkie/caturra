@@ -2303,6 +2303,30 @@ public class ClassFacts {
 }
 """,
     ),
+    dict(
+        id="thread-sleep",
+        category="Library",
+        title="Thread.sleep and the current thread",
+        summary="`Thread.sleep` really waits — in the browser the page streams what came before it — and the thread a program is on has its name, id, state and interrupt flag.",
+        main="Sleepy",
+        source='''
+public class Sleepy {
+    public static void main(String[] args) throws InterruptedException {
+        Thread me = Thread.currentThread();
+        System.out.println(me.getName() + " " + me.getState());
+        long start = System.currentTimeMillis();
+        Thread.sleep(250);
+        System.out.println(System.currentTimeMillis() - start >= 250);
+        me.interrupt();
+        try {
+            Thread.sleep(1000);
+        } catch (InterruptedException e) {
+            System.out.println(e.getMessage() + ", still flagged: " + me.isInterrupted());
+        }
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -2344,7 +2368,7 @@ public class Skeleton {
         id="threads",
         category="Library",
         title="Threads",
-        summary="Concurrency. caturra runs a program on one thread, in one WASM instance.",
+        summary="A second thread. `Thread.sleep`, `Thread.currentThread()` and `Thread` as a value work; starting another thread arrives with the scheduler (specs/CONCURRENCY.md).",
         main="Threads",
         source='''
 public class Threads {

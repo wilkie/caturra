@@ -62085,3 +62085,150 @@ public class SR {
 }
 "#
 );
+
+// `java.lang.Thread`, phase 0 of specs/CONCURRENCY.md: the thread a program is
+// on, and `Thread` as a type and a value — names (`Thread-N` counts only the
+// threads that were not given one), ids (the first a program makes is 23,
+// after a JDK's own), priorities, the interrupt flag, `run()` called directly,
+// a subclass, and every argument error. `Thread.sleep` really waits: here on a
+// virtual clock the program's own `nanoTime` reads, in the browser on the
+// host. A pending interrupt ends a sleep before it starts, and is consumed.
+differential_test!(
+    the_thread_a_program_is_on,
+    "P0b",
+    r#"
+public class P0b {
+    interface Body { Object get() throws Throwable; }
+    static void r(String l, Body b) {
+        try { System.out.println(l + " = " + b.get()); }
+        catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    static class Worker extends Thread {
+        Worker() { super("worker"); }
+        public void run() { System.out.println("worker.run on " + Thread.currentThread().getName()); }
+    }
+    public static void main(String[] args) throws Exception {
+        Thread main = Thread.currentThread();
+        r("main", () -> main);
+        r("same", () -> main == Thread.currentThread());
+        r("name", () -> main.getName());
+        r("id", () -> main.getId());
+        r("priority", () -> main.getPriority());
+        r("daemon", () -> main.isDaemon());
+        r("alive", () -> main.isAlive());
+        r("state", () -> main.getState());
+        r("interrupted-flag", () -> main.isInterrupted());
+        Thread a = new Thread(() -> System.out.println("a ran"));
+        Thread b = new Thread("named");
+        Thread c = new Thread(() -> {}, "both");
+        Worker w = new Worker();
+        r("a", () -> a + " " + a.getId() + " " + a.getState() + " " + a.isAlive());
+        r("b", () -> b + " " + b.getId());
+        r("c", () -> c + " " + c.getId());
+        r("w", () -> w + " " + w.getId());
+        r("a.run-direct", () -> { a.run(); return "ran on " + Thread.currentThread().getName(); });
+        r("b.run-direct", () -> { b.run(); return "nothing"; });
+        r("w.run-direct", () -> { w.run(); return "done"; });
+        r("setName", () -> { a.setName("renamed"); return a.getName() + " " + a; });
+        r("setName-null", () -> { a.setName(null); return "?"; });
+        r("priority-set", () -> { a.setPriority(7); return a.getPriority() + " " + a; });
+        r("priority-high", () -> { a.setPriority(11); return "?"; });
+        r("priority-low", () -> { a.setPriority(0); return "?"; });
+        r("daemon-new", () -> { a.setDaemon(true); return a.isDaemon(); });
+        r("daemon-main", () -> { main.setDaemon(true); return "?"; });
+        r("sleep-neg", () -> { Thread.sleep(-1); return "?"; });
+        r("sleep-nanos-neg", () -> { Thread.sleep(0, -1); return "?"; });
+        r("sleep-nanos-big", () -> { Thread.sleep(0, 1000000); return "?"; });
+        r("sleep-timed", () -> { long t0 = System.nanoTime(); Thread.sleep(150); long ms = (System.nanoTime() - t0) / 1_000_000; return ms >= 150 && ms < 1000; });
+        r("sleep-nanos-timed", () -> { long t0 = System.currentTimeMillis(); Thread.sleep(40, 999999); return System.currentTimeMillis() - t0 >= 40; });
+        r("sleep-zero", () -> { Thread.sleep(0); return "ok"; });
+        r("interrupt-self", () -> { main.interrupt(); return main.isInterrupted(); });
+        r("sleep-when-interrupted", () -> { Thread.sleep(10000); return "slept"; });
+        r("flag-after", () -> main.isInterrupted());
+        r("interrupted-static", () -> { main.interrupt(); boolean first = Thread.interrupted(); return first + " " + Thread.interrupted() + " " + main.isInterrupted(); });
+        r("yield", () -> { Thread.yield(); return "ok"; });
+        r("onSpinWait", () -> { Thread.onSpinWait(); return "ok"; });
+        r("instanceof-runnable", () -> (Object) main instanceof Runnable);
+        r("class", () -> main.getClass().getName());
+        r("worker-class", () -> w.getClass().getName() + " " + (w instanceof Thread));
+        r("main-run-direct", () -> { main.run(); return "nothing"; });
+    }
+}
+"#
+);
+
+// `Thread.State` — a JDK nests it in `Thread`; the bundled source keeps it at
+// the top level under a reserved name (a program's own `State` would collide
+// with a hoisted nested class), and the one dotted-name lookup maps it. Its
+// constants, its statics, a switch over it and its class name all resolve.
+differential_test!(
+    a_thread_s_state,
+    "TS",
+    r#"
+public class TS {
+    public static void main(String[] args) {
+        Thread.State s = Thread.currentThread().getState();
+        System.out.println(s);
+        System.out.println(s == Thread.State.RUNNABLE);
+        System.out.println(new Thread(() -> {}).getState() == Thread.State.NEW);
+        System.out.println(s.getClass().getName() + " " + s.ordinal() + " " + Thread.State.values().length);
+        java.lang.Thread.State q = Thread.State.valueOf("BLOCKED");
+        System.out.println(q + " " + q.compareTo(Thread.State.NEW));
+        switch (s) { case RUNNABLE: System.out.println("switch runnable"); break; default: System.out.println("other"); }
+    }
+}
+"#
+);
+
+// A lambda into a constructor that has an overload of the same arity — which
+// is `Thread(Runnable)` beside `Thread(String)`, and any class of a program
+// with the same pair. Only the functional parameter can take a lambda, so it
+// is the constructor chosen; the pass used to give up on any shared arity.
+differential_test!(
+    a_lambda_chooses_its_constructor,
+    "CR",
+    r#"
+public class CR {
+    static class Box { Runnable r; Box(Runnable r) { this.r = r; } Box(Runnable r, String n) { this.r = r; } Box(String n) {} }
+    public static void main(String[] args) {
+        new Box(() -> System.out.println("one")).r.run();
+        new Box(() -> System.out.println("two"), "n").r.run();
+        Thread t = new Thread(() -> System.out.println("three"));
+        t.run();
+    }
+}
+"#
+);
+
+// A second thread waits for the scheduler (phase 1). Refused by name, with the
+// way to run the target on the thread the program is already on.
+stricter_than_javac!(
+    strict_no_second_thread_yet,
+    "StrictSecondThread",
+    "public class StrictSecondThread { public static void main(String[] a) { new Thread(() -> System.out.println(1)).start(); } }"
+);
+
+// Which thread holds a monitor is answered by the monitors of phase 1.
+stricter_than_javac!(
+    strict_no_monitor_ownership_yet,
+    "StrictHoldsLock",
+    "public class StrictHoldsLock { public static void main(String[] a) { System.out.println(Thread.holdsLock(a)); } }"
+);
+
+// A call caturra refuses still THROWS what Java declares for it: `join()` is
+// refused until the scheduler exists, but its `InterruptedException` is real,
+// so an uncaught one is javac's own first error — and a `catch` around it is
+// legal rather than "never thrown in body of corresponding try statement",
+// which blamed the one line of the program that was right.
+differential_wording!(
+    a_refused_join_still_throws,
+    "RefusedJoin",
+    r#"
+public class RefusedJoin {
+    public static void main(String[] args) {
+        Thread t = new Thread(() -> {});
+        t.join();
+    }
+}
+"#
+);

@@ -2762,6 +2762,12 @@ impl MethodTable {
     /// The declared `throws` names of `class.method/arity`, walking the
     /// superclass chain so an inherited method's clause is found — empty when
     /// none is declared anywhere.
+    /// Whether `class` is one of caturra's BUNDLED library classes (compiled
+    /// Java that stands for a JDK class) rather than one the program declares.
+    pub(crate) fn is_bundled_class(&self, class: &str) -> bool {
+        self.info(class).is_some_and(|info| info.is_bundled)
+    }
+
     pub(crate) fn declared_throws(&self, class: &str, method: &str, arity: usize) -> &[String] {
         // The table is keyed by the BINARY name, and a caller has the name the
         // SOURCE wrote — which for a nested class is the simple one. Looking
@@ -3312,6 +3318,17 @@ impl MethodTable {
         // one of the same name.
         if name.contains('.')
             && let Some(id) = self.by_source.get(name).and_then(|b| self.class_id(b))
+        {
+            return Some(id);
+        }
+        // A nested LIBRARY type the bundled source keeps at the top level
+        // under a reserved name: `Thread.State` is `__ThreadState`, so that a
+        // program's own `State` does not collide with it. Answered here, the
+        // one place every dotted-name reader asks, so the type, its constants
+        // (`Thread.State.NEW`) and its statics (`values()`) all resolve.
+        if let Some(nested) = crate::imports::nested_library_class(name)
+            && nested.starts_with("__")
+            && let Some(id) = self.class_id(nested)
         {
             return Some(id);
         }
@@ -13156,7 +13173,105 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
 /// reason — students find these in documentation, and "cannot find
 /// symbol" would read as a bug.
 #[rustfmt::skip]
+/// Why a phase-0 `Thread` (specs/CONCURRENCY.md) will not run a second one.
+const NO_SECOND_THREAD: &str = "caturra does not run a second thread yet — only the one the program \
+     is already on (calling run() directly runs the target on that thread, as it does in Java)";
+
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
+    // `java.lang.Thread`, phase 0: the thread a program is on, and nothing
+    // that needs another. Each of these waits for the scheduler.
+    ("Thread", "start", NO_SECOND_THREAD),
+    ("Thread", "join", NO_SECOND_THREAD),
+    (
+        "Thread",
+        "holdsLock",
+        "caturra does not model monitor ownership yet",
+    ),
+    (
+        "Thread",
+        "getUncaughtExceptionHandler",
+        "caturra does not run a second thread yet, so no handler is ever asked",
+    ),
+    (
+        "Thread",
+        "setUncaughtExceptionHandler",
+        "caturra does not run a second thread yet, so no handler is ever asked",
+    ),
+    (
+        "Thread",
+        "getDefaultUncaughtExceptionHandler",
+        "caturra does not run a second thread yet, so no handler is ever asked",
+    ),
+    (
+        "Thread",
+        "setDefaultUncaughtExceptionHandler",
+        "caturra does not run a second thread yet, so no handler is ever asked",
+    ),
+    (
+        "Thread",
+        "getStackTrace",
+        "caturra does not model another thread's stack",
+    ),
+    (
+        "Thread",
+        "getAllStackTraces",
+        "caturra does not model another thread's stack",
+    ),
+    (
+        "Thread",
+        "dumpStack",
+        "caturra does not model another thread's stack",
+    ),
+    (
+        "Thread",
+        "countStackFrames",
+        "it was removed from Java itself (deprecated since 1.2)",
+    ),
+    (
+        "Thread",
+        "getThreadGroup",
+        "caturra does not model java.lang.ThreadGroup",
+    ),
+    (
+        "Thread",
+        "activeCount",
+        "caturra does not model java.lang.ThreadGroup",
+    ),
+    (
+        "Thread",
+        "enumerate",
+        "caturra does not model java.lang.ThreadGroup",
+    ),
+    (
+        "Thread",
+        "checkAccess",
+        "caturra does not model java.lang.SecurityManager",
+    ),
+    (
+        "Thread",
+        "getContextClassLoader",
+        "caturra does not model class loaders",
+    ),
+    (
+        "Thread",
+        "setContextClassLoader",
+        "caturra does not model class loaders",
+    ),
+    (
+        "Thread",
+        "stop",
+        "it is deprecated for removal in Java itself (unsafe by design)",
+    ),
+    (
+        "Thread",
+        "suspend",
+        "it is deprecated for removal in Java itself (unsafe by design)",
+    ),
+    (
+        "Thread",
+        "resume",
+        "it is deprecated for removal in Java itself (unsafe by design)",
+    ),
     // A class's access flags are not modelled, and could not be answered
     // honestly if they were: a LIBRARY class has no class file here, and a
     // nested one is flattened to the top level, so the `static` and `private`
@@ -13164,9 +13279,21 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // that is right for a top-level user class and quietly wrong for the other
     // two is worse than saying so. (`Field`/`Method`/`Constructor`
     // `getModifiers` ARE answered — those flags survive.)
-    ("Class", "getModifiers", "caturra does not model a class's access flags"),
-    ("Class", "getPackage", "caturra does not model java.lang.Package"),
-    ("Integer", "getInteger", "system properties are not supported by caturra"),
+    (
+        "Class",
+        "getModifiers",
+        "caturra does not model a class's access flags",
+    ),
+    (
+        "Class",
+        "getPackage",
+        "caturra does not model java.lang.Package",
+    ),
+    (
+        "Integer",
+        "getInteger",
+        "system properties are not supported by caturra",
+    ),
     // The three SPACE queries. caturra's filesystem lives in memory and has no
     // device under it, so every number it could answer would be fiction about
     // a disk the program cannot fill — and a made-up "total" is worse than a
@@ -13195,11 +13322,7 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // nothing to hand back. The default is host state besides. (`useLocale`
     // TAKES one, which is a locale caturra can check and drop: it parses in
     // the US locale, and the locales it answers for ask for that.)
-    (
-        "Scanner",
-        "locale",
-        NO_LOCALE_VALUE,
-    ),
+    ("Scanner", "locale", NO_LOCALE_VALUE),
     // The `TemporalAccessor`/`TemporalAdjuster` plumbing, on every value that
     // declares it. A `TemporalQuery` and a bare `Temporal` are interfaces
     // caturra does not model, so there is nothing to pass or answer — and a
@@ -13208,17 +13331,61 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // Everything that carries an INSTANT or a ZONE. caturra models the
     // arithmetic slice of `java.time`, and answering a zone honestly needs a
     // timezone database it does not vendor (see specs/SCOPE.md).
-    ("LocalDate", "ofInstant", "caturra does not model java.time.Instant"),
-    ("LocalTime", "ofInstant", "caturra does not model java.time.Instant"),
-    ("LocalDateTime", "ofInstant", "caturra does not model java.time.Instant"),
-    ("LocalDateTime", "ofEpochSecond", "caturra does not model java.time.ZoneOffset"),
-    ("LocalDateTime", "toInstant", "caturra does not model java.time.Instant"),
-    ("LocalDate", "toEpochSecond", "caturra does not model java.time.ZoneOffset"),
-    ("LocalTime", "toEpochSecond", "caturra does not model java.time.ZoneOffset"),
-    ("LocalDateTime", "toEpochSecond", "caturra does not model java.time.ZoneOffset"),
-    ("LocalTime", "atOffset", "caturra does not model java.time.ZoneOffset"),
-    ("LocalDateTime", "atOffset", "caturra does not model java.time.ZoneOffset"),
-    ("LocalDateTime", "atZone", "caturra does not model java.time.ZoneId"),
+    (
+        "LocalDate",
+        "ofInstant",
+        "caturra does not model java.time.Instant",
+    ),
+    (
+        "LocalTime",
+        "ofInstant",
+        "caturra does not model java.time.Instant",
+    ),
+    (
+        "LocalDateTime",
+        "ofInstant",
+        "caturra does not model java.time.Instant",
+    ),
+    (
+        "LocalDateTime",
+        "ofEpochSecond",
+        "caturra does not model java.time.ZoneOffset",
+    ),
+    (
+        "LocalDateTime",
+        "toInstant",
+        "caturra does not model java.time.Instant",
+    ),
+    (
+        "LocalDate",
+        "toEpochSecond",
+        "caturra does not model java.time.ZoneOffset",
+    ),
+    (
+        "LocalTime",
+        "toEpochSecond",
+        "caturra does not model java.time.ZoneOffset",
+    ),
+    (
+        "LocalDateTime",
+        "toEpochSecond",
+        "caturra does not model java.time.ZoneOffset",
+    ),
+    (
+        "LocalTime",
+        "atOffset",
+        "caturra does not model java.time.ZoneOffset",
+    ),
+    (
+        "LocalDateTime",
+        "atOffset",
+        "caturra does not model java.time.ZoneOffset",
+    ),
+    (
+        "LocalDateTime",
+        "atZone",
+        "caturra does not model java.time.ZoneId",
+    ),
     // The CHRONOLOGY every date carries. caturra models the ISO calendar and
     // no other, so the handle would answer for a choice that was never made.
     // The `java.nio.file.Files` methods that want a type caturra does not
@@ -13244,13 +13411,41 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "newDirectoryStream",
         "caturra does not model java.nio.file.DirectoryStream — use Files.list(dir)",
     ),
-    ("Scanner", "findInLine", "caturra's Scanner reads whole tokens and cannot search within a line"),
-    ("Scanner", "findWithinHorizon", "caturra's Scanner reads whole tokens and cannot search within a horizon"),
-    ("Scanner", "skip", "caturra's Scanner reads whole tokens and cannot skip by pattern"),
-    ("Scanner", "tokens", "caturra's Scanner does not expose its tokens as a stream"),
-    ("Scanner", "findAll", "caturra's Scanner does not expose matches as a stream"),
-    ("HashMap", "of", "the immutable factories live on Map, not HashMap - write Map.of(...)"),
-    ("HashMap", "ofEntries", "the immutable factories live on Map, not HashMap - write Map.ofEntries(...)"),
+    (
+        "Scanner",
+        "findInLine",
+        "caturra's Scanner reads whole tokens and cannot search within a line",
+    ),
+    (
+        "Scanner",
+        "findWithinHorizon",
+        "caturra's Scanner reads whole tokens and cannot search within a horizon",
+    ),
+    (
+        "Scanner",
+        "skip",
+        "caturra's Scanner reads whole tokens and cannot skip by pattern",
+    ),
+    (
+        "Scanner",
+        "tokens",
+        "caturra's Scanner does not expose its tokens as a stream",
+    ),
+    (
+        "Scanner",
+        "findAll",
+        "caturra's Scanner does not expose matches as a stream",
+    ),
+    (
+        "HashMap",
+        "of",
+        "the immutable factories live on Map, not HashMap - write Map.of(...)",
+    ),
+    (
+        "HashMap",
+        "ofEntries",
+        "the immutable factories live on Map, not HashMap - write Map.ofEntries(...)",
+    ),
     // ---- java.lang.System: the facilities that are the HOST's, not the
     // program's. caturra runs in a browser tab with no process around it.
     ("System", "getProperty", SYSTEM_PROPERTIES),
@@ -13258,15 +13453,31 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("System", "setProperty", SYSTEM_PROPERTIES),
     ("System", "setProperties", SYSTEM_PROPERTIES),
     ("System", "clearProperty", SYSTEM_PROPERTIES),
-    ("System", "getenv", "caturra has no process around it to read an environment from"),
-    ("System", "console", "caturra's console is the page's, not a terminal a java.io.Console could describe"),
+    (
+        "System",
+        "getenv",
+        "caturra has no process around it to read an environment from",
+    ),
+    (
+        "System",
+        "console",
+        "caturra's console is the page's, not a terminal a java.io.Console could describe",
+    ),
     (
         "System",
         "setIn",
         "caturra's System.in is the input the page supplies and cannot be replaced (System.setOut and setErr can)",
     ),
-    ("System", "getLogger", "caturra does not model java.lang.System.Logger"),
-    ("System", "inheritedChannel", "caturra does not model java.nio.channels"),
+    (
+        "System",
+        "getLogger",
+        "caturra does not model java.lang.System.Logger",
+    ),
+    (
+        "System",
+        "inheritedChannel",
+        "caturra does not model java.nio.channels",
+    ),
     ("System", "getSecurityManager", NO_SECURITY_MANAGER),
     ("System", "setSecurityManager", NO_SECURITY_MANAGER),
     ("System", "load", NATIVE_CODE),
@@ -13298,7 +13509,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Class", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
     ("Class", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
     ("Class", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
-    ("Class", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    (
+        "Class",
+        "getDeclaredAnnotationsByType",
+        ANNOTATIONS_DISCARDED,
+    ),
     ("Class", "getAnnotatedSuperclass", ANNOTATIONS_DISCARDED),
     ("Class", "getAnnotatedInterfaces", ANNOTATIONS_DISCARDED),
     ("Class", "isAnnotation", ANNOTATIONS_DISCARDED),
@@ -13312,7 +13527,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "getClassLoader",
         "caturra compiles a whole program at once and has no class loader",
     ),
-    ("Class", "getModule", "caturra does not model the module system"),
+    (
+        "Class",
+        "getModule",
+        "caturra does not model the module system",
+    ),
     ("Class", "getProtectionDomain", CODE_SIGNING),
     ("Class", "getSigners", CODE_SIGNING),
     ("Class", "getResource", NO_CLASS_PATH),
@@ -13389,7 +13608,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("IntSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("LongSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
     ("DoubleSummaryStatistics", "andThen", CONSUMER_ANDTHEN),
-    ("ChronoField", "resolve", "caturra does not model field RESOLUTION, which is a parsing step"),
+    (
+        "ChronoField",
+        "resolve",
+        "caturra does not model field RESOLUTION, which is a parsing step",
+    ),
     (
         "TemporalAdjusters",
         "ofDateAdjuster",
@@ -13461,13 +13684,29 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("DecimalFormat", "getCurrency", NO_CURRENCY),
     ("DecimalFormat", "setCurrency", NO_CURRENCY),
     ("DecimalFormat", "getAvailableLocales", NO_LOCALE_VALUE),
-    ("DecimalFormat", "formatToCharacterIterator", NO_CHARACTER_ITERATOR),
+    (
+        "DecimalFormat",
+        "formatToCharacterIterator",
+        NO_CHARACTER_ITERATOR,
+    ),
     ("NumberFormat", "getCurrency", NO_CURRENCY),
     ("NumberFormat", "setCurrency", NO_CURRENCY),
     ("NumberFormat", "getAvailableLocales", NO_LOCALE_VALUE),
-    ("NumberFormat", "formatToCharacterIterator", NO_CHARACTER_ITERATOR),
-    ("DecimalFormat", "getDecimalFormatSymbols", NO_FORMAT_SYMBOLS),
-    ("DecimalFormat", "setDecimalFormatSymbols", NO_FORMAT_SYMBOLS),
+    (
+        "NumberFormat",
+        "formatToCharacterIterator",
+        NO_CHARACTER_ITERATOR,
+    ),
+    (
+        "DecimalFormat",
+        "getDecimalFormatSymbols",
+        NO_FORMAT_SYMBOLS,
+    ),
+    (
+        "DecimalFormat",
+        "setDecimalFormatSymbols",
+        NO_FORMAT_SYMBOLS,
+    ),
     // ---- The reflective members. What is left on each of the three is one
     // of four things caturra's class files do not carry: annotations,
     // generic signatures, the `Exceptions` attribute, and parameter NAMES.
@@ -13476,7 +13715,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Field", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
     ("Field", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
     ("Field", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
-    ("Field", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    (
+        "Field",
+        "getDeclaredAnnotationsByType",
+        ANNOTATIONS_DISCARDED,
+    ),
     ("Field", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
     ("Field", "getAnnotatedType", ANNOTATIONS_DISCARDED),
     ("Field", "getAnnotatedExceptionTypes", ANNOTATIONS_DISCARDED),
@@ -13494,11 +13737,23 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Method", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
     ("Method", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
     ("Method", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
-    ("Method", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    (
+        "Method",
+        "getDeclaredAnnotationsByType",
+        ANNOTATIONS_DISCARDED,
+    ),
     ("Method", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
     ("Method", "getAnnotatedType", ANNOTATIONS_DISCARDED),
-    ("Method", "getAnnotatedExceptionTypes", ANNOTATIONS_DISCARDED),
-    ("Method", "getAnnotatedParameterTypes", ANNOTATIONS_DISCARDED),
+    (
+        "Method",
+        "getAnnotatedExceptionTypes",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Method",
+        "getAnnotatedParameterTypes",
+        ANNOTATIONS_DISCARDED,
+    ),
     ("Method", "getAnnotatedReceiverType", ANNOTATIONS_DISCARDED),
     ("Method", "getAnnotatedReturnType", ANNOTATIONS_DISCARDED),
     ("Method", "getParameterAnnotations", ANNOTATIONS_DISCARDED),
@@ -13510,16 +13765,48 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Constructor", "getAnnotation", ANNOTATIONS_DISCARDED),
     ("Constructor", "getAnnotations", ANNOTATIONS_DISCARDED),
     ("Constructor", "getAnnotationsByType", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getDeclaredAnnotation", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getDeclaredAnnotations", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getDeclaredAnnotationsByType", ANNOTATIONS_DISCARDED),
+    (
+        "Constructor",
+        "getDeclaredAnnotation",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Constructor",
+        "getDeclaredAnnotations",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Constructor",
+        "getDeclaredAnnotationsByType",
+        ANNOTATIONS_DISCARDED,
+    ),
     ("Constructor", "isAnnotationPresent", ANNOTATIONS_DISCARDED),
     ("Constructor", "getAnnotatedType", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getAnnotatedExceptionTypes", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getAnnotatedParameterTypes", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getAnnotatedReceiverType", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getAnnotatedReturnType", ANNOTATIONS_DISCARDED),
-    ("Constructor", "getParameterAnnotations", ANNOTATIONS_DISCARDED),
+    (
+        "Constructor",
+        "getAnnotatedExceptionTypes",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Constructor",
+        "getAnnotatedParameterTypes",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Constructor",
+        "getAnnotatedReceiverType",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Constructor",
+        "getAnnotatedReturnType",
+        ANNOTATIONS_DISCARDED,
+    ),
+    (
+        "Constructor",
+        "getParameterAnnotations",
+        ANNOTATIONS_DISCARDED,
+    ),
     ("Constructor", "getGenericExceptionTypes", ERASED_SIGNATURE),
     ("Constructor", "getGenericParameterTypes", ERASED_SIGNATURE),
     ("Constructor", "getGenericReturnType", ERASED_SIGNATURE),
@@ -13539,7 +13826,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // four settings a pattern is resolved against.
     ("DateTimeFormatter", "parse", FORMATTER_PARSES_ELSEWHERE),
     ("DateTimeFormatter", "parseBest", FORMATTER_PARSES_ELSEWHERE),
-    ("DateTimeFormatter", "parseUnresolved", FORMATTER_PARSES_ELSEWHERE),
+    (
+        "DateTimeFormatter",
+        "parseUnresolved",
+        FORMATTER_PARSES_ELSEWHERE,
+    ),
     ("DateTimeFormatter", "parsedExcessDays", TEMPORAL_QUERY),
     ("DateTimeFormatter", "parsedLeapSecond", TEMPORAL_QUERY),
     ("DateTimeFormatter", "getLocale", NO_LOCALE_VALUE),
@@ -13551,11 +13842,31 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("DateTimeFormatter", "withZone", FORMATTER_HAS_NO_ZONE),
     ("DateTimeFormatter", "getDecimalStyle", NO_DECIMAL_STYLE),
     ("DateTimeFormatter", "withDecimalStyle", NO_DECIMAL_STYLE),
-    ("DateTimeFormatter", "getResolverStyle", RESOLUTION_IS_PARSING),
-    ("DateTimeFormatter", "withResolverStyle", RESOLUTION_IS_PARSING),
-    ("DateTimeFormatter", "getResolverFields", RESOLUTION_IS_PARSING),
-    ("DateTimeFormatter", "withResolverFields", RESOLUTION_IS_PARSING),
-    ("DateTimeFormatter", "toFormat", "caturra does not model java.text.Format"),
+    (
+        "DateTimeFormatter",
+        "getResolverStyle",
+        RESOLUTION_IS_PARSING,
+    ),
+    (
+        "DateTimeFormatter",
+        "withResolverStyle",
+        RESOLUTION_IS_PARSING,
+    ),
+    (
+        "DateTimeFormatter",
+        "getResolverFields",
+        RESOLUTION_IS_PARSING,
+    ),
+    (
+        "DateTimeFormatter",
+        "withResolverFields",
+        RESOLUTION_IS_PARSING,
+    ),
+    (
+        "DateTimeFormatter",
+        "toFormat",
+        "caturra does not model java.text.Format",
+    ),
     (
         "DateTimeFormatter",
         "formatTo",
@@ -13573,7 +13884,11 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ("Files", "createLink", FILE_LINKS),
     ("Files", "createSymbolicLink", FILE_LINKS),
     ("Files", "readSymbolicLink", FILE_LINKS),
-    ("Files", "getFileStore", "caturra does not model java.nio.file.FileStore"),
+    (
+        "Files",
+        "getFileStore",
+        "caturra does not model java.nio.file.FileStore",
+    ),
     ("Files", "readAttributes", FILE_ATTRIBUTE_VIEWS),
     ("Files", "getAttribute", FILE_ATTRIBUTE_VIEWS),
     ("Files", "setAttribute", FILE_ATTRIBUTE_VIEWS),
@@ -21800,6 +22115,10 @@ const LONG_METHODS: &[BuiltinMethod] = &[
 
 const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
+    // The host's wait, for the bundled `Thread.sleep` (see
+    // `specs/CONCURRENCY.md`). Reserved-prefixed, so only bundled source —
+    // which reaches it as `__System.__sleep` — ever names it.
+    bm("__sleep", &[L], BRet::Void, "(J)V"),
     // `System.gc()` is a REQUEST in Java ("the Java Virtual Machine expends
     // effort"), and it is one here too: the collector runs at the next
     // safepoint, which is the next instruction.
@@ -34797,10 +35116,21 @@ impl BodyGen<'_> {
     ///
     /// Reports the reason and answers `true` when it did.
     fn bundled_member_refusal(&mut self, class: &str, method: &str, span: SourceSpan) -> bool {
-        if !self.table.info(class).is_some_and(|info| info.is_bundled) {
+        // A bundled class that stands for a JDK one carries the JDK's BINARY
+        // name (`java/lang/Thread`), and the instance path hands that in; the
+        // table and the refusals are keyed by the simple name, so both are
+        // asked by it. Asked by the binary name, every refusal of a renamed
+        // bundled class read as "cannot find symbol".
+        let simple = class.rsplit('/').next().unwrap_or(class);
+        if !self
+            .table
+            .info(class)
+            .or_else(|| self.table.info(simple))
+            .is_some_and(|info| info.is_bundled)
+        {
             return false;
         }
-        let Some(reason) = unsupported_member(class, method) else {
+        let Some(reason) = unsupported_member(simple, method) else {
             return false;
         };
         // The class as the PROGRAM spells it: the receiver here is an
@@ -38110,7 +38440,14 @@ impl BodyGen<'_> {
                 [enclosing, nested]
                     if self.lookup(enclosing).is_none()
                         && self.table.has_class(enclosing)
-                        && self.table.has_class(nested) =>
+                        && (self.table.has_class(nested)
+                            // `Thread.State.values()`: a nested library type
+                            // kept under a reserved name, which only the
+                            // qualified lookup knows.
+                            || self
+                                .table
+                                .qualified_nested_class(&format!("{enclosing}.{nested}"))
+                                .is_some()) =>
                 {
                     let dotted = format!("{enclosing}.{nested}");
                     let named = self.table.qualified_nested_class(&dotted).map_or_else(
@@ -41861,7 +42198,11 @@ impl BodyGen<'_> {
                         if path.len() == 2
                             && self.lookup(&path[0]).is_none()
                             && self.table.has_class(&path[0])
-                            && self.table.has_class(&path[1]) =>
+                            && (self.table.has_class(&path[1])
+                                || self
+                                    .table
+                                    .qualified_nested_class(&path.join("."))
+                                    .is_some()) =>
                     {
                         let dotted = path.join(".");
                         self.table.qualified_nested_class(&dotted).map_or_else(

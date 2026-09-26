@@ -630,6 +630,16 @@
     "expected": "java.lang\n[HEARTS, SPADES]\nnull\ntrue ClassFacts\n2\nInteger\n"
   },
   {
+    "id": "thread-sleep",
+    "category": "Library",
+    "title": "Thread.sleep and the current thread",
+    "summary": "`Thread.sleep` really waits \u2014 in the browser the page streams what came before it \u2014 and the thread a program is on has its name, id, state and interrupt flag.",
+    "main": "Sleepy",
+    "source": "public class Sleepy {\n    public static void main(String[] args) throws InterruptedException {\n        Thread me = Thread.currentThread();\n        System.out.println(me.getName() + \" \" + me.getState());\n        long start = System.currentTimeMillis();\n        Thread.sleep(250);\n        System.out.println(System.currentTimeMillis() - start >= 250);\n        me.interrupt();\n        try {\n            Thread.sleep(1000);\n        } catch (InterruptedException e) {\n            System.out.println(e.getMessage() + \", still flagged: \" + me.isInterrupted());\n        }\n    }\n}\n",
+    "status": "supported",
+    "expected": "main RUNNABLE\ntrue\nsleep interrupted, still flagged: false\n"
+  },
+  {
     "id": "abstract-collections",
     "category": "Collections",
     "title": "The AbstractCollection skeletons",
@@ -643,11 +653,11 @@
     "id": "threads",
     "category": "Library",
     "title": "Threads",
-    "summary": "Concurrency. caturra runs a program on one thread, in one WASM instance.",
+    "summary": "A second thread. `Thread.sleep`, `Thread.currentThread()` and `Thread` as a value work; starting another thread arrives with the scheduler (specs/CONCURRENCY.md).",
     "main": "Threads",
     "source": "public class Threads {\n    public static void main(String[] args) throws InterruptedException {\n        Thread worker = new Thread(() -> System.out.println(\"working\"));\n        worker.start();\n        worker.join();\n    }\n}\n",
     "status": "unsupported",
-    "reason": "java.lang.Thread is not supported by caturra (the class library covers the AP CS A subset)"
+    "reason": "Thread.start exists in Java, but caturra does not run a second thread yet \u2014 only the one the program is already on (calling run() directly runs the target on that thread, as it does in Java)"
   },
   {
     "id": "class-modifiers",

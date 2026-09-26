@@ -9044,6 +9044,12 @@ counting catches: a divergence that stopped being one.
   about running on more than one thread, and caturra has one. Each is refused
   by NAME, since the package itself is one caturra knows.
   (`strict_no_concurrent_classes`)
+- `Thread.start()` and `join()` — a second thread waits for the scheduler of
+  specs/CONCURRENCY.md (phase 1). The refusal says so, and names what does run:
+  `run()` called directly runs the target on the thread the program is on, as
+  it does in Java. (`strict_no_second_thread_yet`)
+- `Thread.holdsLock(obj)` — which thread owns a monitor is answered by the real
+  monitors of phase 1. (`strict_no_monitor_ownership_yet`)
 - `Character.getName(cp)`, `codePointOf(name)` and `getDirectionality(c)` —
   caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
   its siblings need, not the character database of NAMES.
@@ -15724,6 +15730,50 @@ overloads caturra refuses outright — the generic half of that class
 `parallelSort`, and `copyOf`/`copyOfRange` with an array class). They are in
 the skipped list under "caturra would not take the probe", which is where the
 next unit comes from.
+
+### `java.lang.Thread`, phase 0: the thread a program is on (2026-09-25)
+
+The first phase of specs/CONCURRENCY.md. `Thread` was refused outright — "not
+supported by caturra (the class library covers the AP CS A subset)" — and it is
+bundled Java now, reporting the JDK's binary name, with everything that does not
+need a second thread: `Thread.currentThread()` and its name, id, priority,
+daemon flag, state and interrupt flag; constructing one (names are `Thread-N`
+counting only the threads not given a name; ids start at 23, after a JDK's own
+threads — both measured); `run()` called directly, which runs the target on
+the calling thread exactly as it does in Java; a subclass; and each argument
+error with the JDK's words. `Thread.State` resolves as a type, as constants,
+through its statics and in a `switch`; it lives at the top level under a
+reserved name, because a nested class is hoisted under its simple name and
+programs have classes called `State`.
+
+**`Thread.sleep` really waits.** It reaches the host through one new hook,
+`ConsoleIo::wait_millis`, in slices of at most 100 ms. The browser worker parks
+on `Atomics.wait` with a timeout on a private shared cell — or watches the clock
+where shared memory is unavailable — so the page streams what the program
+printed before the sleep, and the program's own clock sees the pause. Tests and
+the CLI keep a VIRTUAL clock the sleep advances instantly, so a sleeping program
+runs in no time and every timing it measures is exact. A pending interrupt ends
+a sleep before it starts and is consumed ("sleep interrupted"); `sleep(ms,
+nanos)` rounds the way JDK 11 does. `start()` and `join()` are refused by name
+until the scheduler exists.
+
+Two general gaps surfaced on the way, neither about threads:
+
+- **A lambda passed to a constructor that has an overload of the same arity**
+  was refused — "a lambda is only allowed where a functional-interface type is
+  expected" — because the pass gave up on any shared arity. `Thread(Runnable)`
+  beside `Thread(String)` is that pair, and so is any class of a program with
+  one. Only a functional parameter can take a lambda, which is javac's own
+  first cut; when one constructor survives it, that is the one.
+- **A refusal of a bundled class that carries a JDK binary name** read "cannot
+  find symbol": the instance path asked by `java/lang/Thread` and the refusal
+  table is keyed by the simple name. It asks by both now.
+
+Pinned as `the_thread_a_program_is_on`, `a_thread_s_state`,
+`a_lambda_chooses_its_constructor`, `strict_no_second_thread_yet` and
+`strict_no_monitor_ownership_yet`; the WASM wait by a session test that times a
+real 200 ms sleep; and a supported `thread-sleep` entry on the compatibility
+page.
 
 ### A modification count is a count (2026-09-25)
 

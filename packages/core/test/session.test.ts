@@ -105,6 +105,42 @@ describe('javac (compile)', () => {
 });
 
 describe('java (run)', () => {
+  // `Thread.sleep` really waits in the WASM build (specs/CONCURRENCY.md, phase
+  // 0): the console parks on `Atomics.wait` with a timeout, or watches the
+  // clock where it cannot park. Output written before the sleep is streamed
+  // before the wait, and the program's own clock sees the pause it asked for.
+  it('waits for real in Thread.sleep', async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Main.java',
+        text: `
+public class Main {
+    public static void main(String[] args) throws InterruptedException {
+        System.out.println("before");
+        long start = System.currentTimeMillis();
+        Thread.sleep(200);
+        System.out.println(System.currentTimeMillis() - start >= 200);
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.success).toBe(true);
+
+    const stdout: { text: string; at: number }[] = [];
+    const began = performance.now();
+    const result = session.run('Main', {
+      onStdout: (text) => stdout.push({ text, at: performance.now() }),
+    });
+    const took = performance.now() - began;
+    expect(result.status).toBe('completed');
+    expect(stdout.map((chunk) => chunk.text).join('')).toBe('before\ntrue\n');
+    expect(took).toBeGreaterThanOrEqual(195);
+    // The line before the sleep arrived before the wait, not after it.
+    expect((stdout.at(-1)?.at ?? 0) - (stdout[0]?.at ?? 0)).toBeGreaterThanOrEqual(195);
+  });
+
   it('runs Hello World and streams stdout', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([{ path: 'Main.java', text: HELLO_WORLD }]);

@@ -1337,6 +1337,40 @@ fn inherited_arguments(
 /// Only a variable a constructor parameter names OUTRIGHT is pinned. One that
 /// appears inside a parameter's own arguments is the collection copy the arm
 /// beside this already reads, and one nothing mentions cannot be pinned at all.
+/// Of a class's constructors, the one a call's LAMBDA arguments can land in.
+///
+/// One constructor of the call's arity is simply it. Several used to be an
+/// overload question this pass declined to answer — so `new Thread(() -> …)`
+/// was "a lambda is only allowed where a functional-interface type is
+/// expected", because `Thread(Runnable)` has a one-argument sibling,
+/// `Thread(String)`; any class of the program with the same pair was refused
+/// the same way. A lambda or a method reference can only be applicable where
+/// the parameter IS a functional interface, which is javac's own first cut
+/// (JLS 15.12.2.1), and it is usually all the cut needed: when exactly one
+/// constructor survives it, that is the one.
+fn applicable_to_lambdas<'s>(
+    signatures: &'s [Vec<TypeRef>],
+    args: &[Expr],
+    ctx: &Ctx,
+) -> Option<&'s Vec<TypeRef>> {
+    let mut same_arity = signatures
+        .iter()
+        .filter(|params| params.len() == args.len());
+    let first = same_arity.next()?;
+    if same_arity.next().is_none() {
+        return Some(first);
+    }
+    let mut fitting = signatures.iter().filter(|params| {
+        params.len() == args.len()
+            && params.iter().zip(args).all(|(param, arg)| {
+                !matches!(arg, Expr::Lambda { .. } | Expr::MethodRef { .. })
+                    || sam_target(param, ctx).is_some()
+            })
+    });
+    let only = fitting.next()?;
+    fitting.next().is_none().then_some(only)
+}
+
 fn diamond_arguments(class: &str, args: &[Expr], ctx: &Ctx) -> Option<Vec<TypeRef>> {
     let info = ctx.hierarchy.get(class)?;
     if info.params.is_empty() {
@@ -3945,15 +3979,11 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 return;
             }
             // Target-type a lambda constructor argument (`new Timer(40, e -> …)`)
-            // when exactly one constructor of the class takes this many args.
-            let param_types = ctx.constructors.get(class).and_then(|sigs| {
-                let mut matching = sigs.iter().filter(|s| s.len() == args.len());
-                let first = matching.next()?;
-                match matching.next() {
-                    None => Some(first.clone()),
-                    Some(_) => None, // ambiguous arity — leave untyped
-                }
-            });
+            // from the one constructor that can take it.
+            let param_types = ctx
+                .constructors
+                .get(class)
+                .and_then(|sigs| applicable_to_lambdas(sigs, args, ctx).cloned());
             for (index, arg) in args.iter_mut().enumerate() {
                 let expected = param_types.as_ref().map(|types| types[index].clone());
                 desugar_expr(arg, expected.as_ref(), ctx);
