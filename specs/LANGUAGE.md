@@ -9005,11 +9005,6 @@ counting catches: a divergence that stopped being one.
   `ofInstant(...)` and `getChronology()` — everything carrying an INSTANT, a
   ZONE or a calendar choice, which needs the timezone database caturra does not
   vendor. (`strict_a_date_time_has_no_zone`)
-- `anObject.wait()`, `notify()`, `notifyAll()` — `Object`'s monitor methods,
-  so EVERY receiver has them. caturra runs a program on one thread: there is no
-  second thread to wake, and a `wait()` that returned immediately would be a
-  lie about a program that deadlocks on a JDK.
-  (`strict_no_thread_to_wait_for`)
 - `aCollection.spliterator()`, and the same name on `Arrays`, `Stream` and
   `IntStream` — a `Spliterator` is a parallel-decomposition handle for a
   machine with threads. (`strict_no_spliterator`)
@@ -9041,15 +9036,10 @@ counting catches: a divergence that stopped being one.
   same job. (`strict_no_concurrent_collectors`)
 - Every class of `java.util.concurrent` but `ThreadLocalRandom` —
   `ConcurrentHashMap`, `ExecutorService`, `CountDownLatch` and the rest are
-  about running on more than one thread, and caturra has one. Each is refused
-  by NAME, since the package itself is one caturra knows.
+  phase 2 of specs/CONCURRENCY.md, to be written as bundled Java over the
+  threads and monitors phase 1 built. Until then each is refused by NAME,
+  since the package itself is one caturra knows.
   (`strict_no_concurrent_classes`)
-- `Thread.start()` and `join()` — a second thread waits for the scheduler of
-  specs/CONCURRENCY.md (phase 1). The refusal says so, and names what does run:
-  `run()` called directly runs the target on the thread the program is on, as
-  it does in Java. (`strict_no_second_thread_yet`)
-- `Thread.holdsLock(obj)` — which thread owns a monitor is answered by the real
-  monitors of phase 1. (`strict_no_monitor_ownership_yet`)
 - `Character.getName(cp)`, `codePointOf(name)` and `getDirectionality(c)` —
   caturra carries Unicode's character CATEGORIES, which is what `isLetter` and
   its siblings need, not the character database of NAMES.
@@ -9082,9 +9072,19 @@ counting catches: a divergence that stopped being one.
   program declares (the override, or the default), but a library VALUE has no
   class file to run one from. (`run_no_object_method_on_a_library_value`)
 - `Object.class.getDeclaredMethod("notify").invoke(o)` and the rest of
-  `Object`'s monitor list — caturra runs one thread and holds no monitors, and
-  `clone`, `finalize` and `registerNatives` are ones a JDK itself refuses for
-  access. (`run_no_monitors_through_reflection`)
+  `Object`'s monitor list — the monitor methods run as direct calls only (a
+  reflective call is native code, where no thread can be set aside to wait),
+  and `clone`, `finalize` and `registerNatives` are ones a JDK itself refuses
+  for access. (`run_no_monitors_through_reflection`)
+- A program in which every thread is parked and none is waiting on time — a
+  deadlock, or a `join` nothing will end. A JDK hangs for ever; a browser tab
+  must not, so the run ends with a thread dump naming what each thread waits
+  for and who holds it. (`refused_every_thread_blocked`)
+- `join`, `wait` or a contended `synchronized` INSIDE a callback that library
+  code invoked (a `forEach` body, a comparator, an event handler). That
+  code is on the host stack, so the thread cannot be set aside while another
+  runs, and the wait could never end; the refusal says to move it outside the
+  callback. A `sleep` there still sleeps. (`refused_join_inside_a_callback`)
 - `aFormat.getCurrency()` / `setCurrency(c)` — caturra does not model
   `java.util.Currency`; the pattern's currency sign is what it draws.
   (`strict_a_format_names_no_currency`)
@@ -15769,11 +15769,59 @@ Two general gaps surfaced on the way, neither about threads:
   find symbol": the instance path asked by `java/lang/Thread` and the refusal
   table is keyed by the simple name. It asks by both now.
 
-Pinned as `the_thread_a_program_is_on`, `a_thread_s_state`,
-`a_lambda_chooses_its_constructor`, `strict_no_second_thread_yet` and
-`strict_no_monitor_ownership_yet`; the WASM wait by a session test that times a
-real 200 ms sleep; and a supported `thread-sleep` entry on the compatibility
-page.
+Pinned as `the_thread_a_program_is_on`, `a_thread_s_state` and
+`a_lambda_chooses_its_constructor` (and, until phase 1 retired them, two strict
+pins for `start`/`join` and `holdsLock`); the WASM wait by a session test that
+times a real 200 ms sleep; and a supported `thread-sleep` entry on the
+compatibility page.
+
+### Threads, phase 1: a second thread runs (2026-09-25)
+
+The scheduler of specs/CONCURRENCY.md. A thread is DATA — a saved frame stack
+and a park state — and one runs at a time: the interpreter swaps its frames
+for another thread's at the one safepoint, when the running thread has spent
+its quantum (10,000 instructions) or parked. Scheduling is round robin and
+deterministic, so a program prints the same interleaving every run, and the
+textbook race still loses updates (a slice boundary lands inside `count++`).
+
+- **`start`, `join`, `join(ms)`, `isAlive`, `getState`** are real. `start`
+  returns at once and the new thread runs when the scheduler next picks it,
+  which is why `main` usually prints first, here as there. A second `start` is
+  `IllegalThreadStateException` with no message.
+- **A blocking call never blocks the host.** `sleep`, `join`, `wait` and a
+  contended `synchronized` REWIND to the calling instruction and park the
+  thread; it re-executes once it may run, and learns then how the wait ended
+  (time, target finished, notified, or interrupted). The host waits only when
+  every live thread is parked and one is waiting on time — two threads'
+  sleeps overlap, as they do on a JDK.
+- **`synchronized` is a real monitor.** The block is `__monitorEnter`, a
+  `try`, and `__monitorExit` in its `finally` — javac's own shape — and a
+  `synchronized` method is its body inside `synchronized (this)` (or the
+  class). `Object.wait`/`notify`/`notifyAll` compile on any reference; notify
+  wakes the longest waiter; a notified waiter is BLOCKED until it re-takes the
+  monitor at the count it held. Without ownership each is
+  `IllegalMonitorStateException` with a null message — Java 11's; the words a
+  later JDK added are not in it.
+- **Interrupts** wake a sleep ("sleep interrupted"), a join and a wait (both
+  with no message) and are consumed doing so; a thread that is not alive keeps
+  no flag; `join` of a thread that is not alive returns at once even with an
+  interrupt pending, because the JDK's loop asks `isAlive()` first.
+- **What escapes `run`** prints `Exception in thread "Thread-0" …` and the
+  trace on standard error — ending in `java.base/java.lang.Thread.run(Thread
+  .java:829)` beneath a target, the one library frame a trace shows here — and
+  the other threads carry on. `main` dying while others run prints its banner
+  at that moment; the program runs on until they finish and then fails with
+  `main`'s exception. The run lasts until no non-daemon thread is left.
+- **Two refusals, both stricter**: a program whose every thread is parked
+  with none waiting on time ends with a thread dump where a JDK would hang,
+  and a `join`/`wait`/contended monitor inside a callback library code invoked
+  cannot park (the library's frames are on the host stack) and says so.
+
+Pinned as `a_second_thread_runs`, `a_parked_thread_s_state`,
+`threads_hand_over_through_a_monitor`,
+`an_uncaught_exception_ends_only_its_thread` (standard error compared too — a
+new `differential_test_stderr!`), `refused_every_thread_blocked` and
+`refused_join_inside_a_callback`.
 
 ### A modification count is a count (2026-09-25)
 

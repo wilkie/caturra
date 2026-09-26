@@ -240,6 +240,54 @@ fn desugar_try_with_resources(
     }
 }
 
+/// `synchronized (lock) { body }` (JLS 14.19). The lock is evaluated ONCE
+/// into a synthetic local; dereferencing it throws the NullPointerException
+/// `monitorenter` throws for a null lock (and refuses a primitive lock at
+/// compile time, as javac does); the monitor is then taken, and released
+/// however the body ends — the handler javac itself emits, written as a
+/// `finally`.
+fn desugar_synchronized(lock: Expr, body: Vec<Stmt>, span: SourceSpan, serial: usize) -> Stmt {
+    let name = format!("__caturraLock${serial}");
+    let name_expr = || Expr::Name {
+        path: vec![name.clone()],
+        span,
+    };
+    let call = |receiver: Expr, method: &str, args: Vec<Expr>| {
+        Stmt::Expr(Expr::Call {
+            receiver: Some(Box::new(receiver)),
+            method: method.to_owned(),
+            args,
+            type_args: Vec::new(),
+            span,
+        })
+    };
+    let system = || Expr::Name {
+        path: vec![String::from("__System")],
+        span,
+    };
+    Stmt::Block(vec![
+        Stmt::LocalDecl {
+            ty: TypeRef::Var,
+            is_final: true,
+            declarators: vec![LocalDeclarator {
+                name: name.clone(),
+                init: Some(lock),
+                span,
+                extra_dims: 0,
+            }],
+            span,
+        },
+        call(name_expr(), "getClass", Vec::new()),
+        call(system(), "__monitorEnter", vec![name_expr()]),
+        Stmt::Try {
+            body,
+            catches: Vec::new(),
+            finally_body: Some(vec![call(system(), "__monitorExit", vec![name_expr()])]),
+            span,
+        },
+    ])
+}
+
 fn primitive_type_name(keyword: Keyword) -> Option<&'static str> {
     Some(match keyword {
         // `void.class` is a class literal too (it is `Void.TYPE`), even though
@@ -374,6 +422,9 @@ struct Modifiers {
     is_abstract: bool,
     is_protected: bool,
     is_default: bool,
+    /// A `synchronized` method: its body runs holding the monitor of `this`
+    /// (or of the class, for a static one).
+    is_synchronized: bool,
 }
 
 /// Parsed class-level modifiers.
@@ -848,18 +899,19 @@ impl Parser<'_> {
                     modifiers.is_default = true;
                     self.pos += 1;
                 }
-                // Modifiers with no effect in caturra's single-threaded VM,
-                // but perfectly ordinary Java that a member may carry:
-                // `transient` (serialization, not modelled),
-                // `volatile`/`synchronized` (threading, likewise) and
-                // `strictfp` (the default since Java 17 — caturra's IEEE
-                // arithmetic already behaves that way). They used to make the
-                // whole member unparseable: "expected a type".
+                Some(TokenKind::Keyword(Keyword::Synchronized)) => {
+                    modifiers.is_synchronized = true;
+                    self.pos += 1;
+                }
+                // Modifiers with no effect in caturra, but perfectly ordinary
+                // Java that a member may carry: `transient` (serialization,
+                // not modelled), `volatile` (one engine thread runs at a time,
+                // so every write is already visible) and `strictfp` (the
+                // default since Java 17 — caturra's IEEE arithmetic already
+                // behaves that way). They used to make the whole member
+                // unparseable: "expected a type".
                 Some(TokenKind::Keyword(
-                    Keyword::Transient
-                    | Keyword::Volatile
-                    | Keyword::Strictfp
-                    | Keyword::Synchronized,
+                    Keyword::Transient | Keyword::Volatile | Keyword::Strictfp,
                 )) => {
                     self.pos += 1;
                 }
@@ -1622,6 +1674,32 @@ impl Parser<'_> {
                 name_span,
             );
         }
+        // A `synchronized` method is its body inside `synchronized (this)`, or
+        // `synchronized (C.class)` for a static one (JLS 8.4.3.6).
+        let body = match body {
+            Some(body) if modifiers.is_synchronized && !is_interface => {
+                let lock = if modifiers.is_static {
+                    Expr::Field {
+                        object: Box::new(Expr::Name {
+                            path: vec![class_name.to_owned()],
+                            span: name_span,
+                        }),
+                        name: String::from("class"),
+                        span: name_span,
+                    }
+                } else {
+                    Expr::This { span: name_span }
+                };
+                self.resource_counter += 1;
+                Some(vec![desugar_synchronized(
+                    lock,
+                    body,
+                    name_span,
+                    self.resource_counter,
+                )])
+            }
+            other => other,
+        };
         Ok(Member::Method(MethodDecl {
             name,
             is_static: modifiers.is_static,
@@ -2396,14 +2474,8 @@ impl Parser<'_> {
             }));
         }
 
-        // `synchronized (lock) { … }`. On ONE thread a monitor is never
-        // contended, so the statement means: evaluate the lock, fail if it is
-        // null (`monitorenter` throws NPE, and a program can see that), and run
-        // the body. Refusing it kept perfectly ordinary Java out of an engine
-        // for which it is a no-op — the lock is dereferenced here by calling
-        // `getClass()` on it and discarding the answer, which is the same
-        // check the instruction performs, and which also refuses a primitive
-        // lock the way javac does.
+        // `synchronized (lock) { … }` — a real monitor, held for the body
+        // however it ends (see `desugar_synchronized`).
         if self.at_keyword(Keyword::Synchronized)
             && matches!(self.peek_at(1), Some(TokenKind::Symbol("(")))
         {
@@ -2412,16 +2484,15 @@ impl Parser<'_> {
             self.expect_symbol("(", "after 'synchronized'")?;
             let lock = self.expression()?;
             self.expect_symbol(")", "to close the synchronized lock")?;
-            let mut body = vec![Stmt::Expr(Expr::Call {
-                receiver: Some(Box::new(lock)),
-                method: String::from("getClass"),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                span,
-            })];
             self.expect_symbol("{", "to open the synchronized block")?;
-            body.extend(self.block_body());
-            return Ok(Some(Stmt::Block(body)));
+            let body = self.block_body();
+            self.resource_counter += 1;
+            return Ok(Some(desugar_synchronized(
+                lock,
+                body,
+                span,
+                self.resource_counter,
+            )));
         }
 
         // `super.method(...)` / `this.field` etc. are expression
@@ -6695,11 +6766,12 @@ mod tests {
     }
 
     #[test]
-    fn unsynchronized_blocks_run_their_body() {
-        // On ONE thread a monitor is never contended, so `synchronized (x)` is
-        // the body plus the null check `monitorenter` performs — which is why
-        // this parses to a block whose first statement dereferences the lock.
-        // It was refused with "not supported by caturra" until 2026-08-20.
+    fn synchronized_blocks_hold_a_monitor() {
+        // `synchronized (x) { body }` is the lock in a local, its null check,
+        // the monitor taken, and the body in a `try` whose `finally` releases
+        // it — javac's own shape (JLS 14.19). Refused with "not supported by
+        // caturra" until 2026-08-20; a no-op on one thread until phase 1 of
+        // specs/CONCURRENCY.md.
         let unit = parse_ok(
             r#"
             class Main {
@@ -6717,7 +6789,11 @@ mod tests {
         let Stmt::Block(inner) = &body[0] else {
             panic!("synchronized lowers to a block: {body:?}");
         };
-        assert_eq!(inner.len(), 2, "the lock check and the body: {inner:?}");
+        assert_eq!(inner.len(), 4, "lock, null check, enter, try: {inner:?}");
+        let Stmt::Try { finally_body: Some(release), .. } = &inner[3] else {
+            panic!("the body is guarded by a finally: {inner:?}");
+        };
+        assert_eq!(release.len(), 1, "the finally releases the monitor");
     }
 
     #[test]

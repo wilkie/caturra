@@ -203,6 +203,7 @@ pub const EXCEPTIONS: &[(&str, &str)] = &[
     // which a program can do to its own thread (`currentThread().interrupt()`)
     // even before there is a second one to do it (specs/CONCURRENCY.md).
     ("java/lang/InterruptedException", "java/lang/Exception"),
+    ("java/lang/IllegalMonitorStateException", "java/lang/RuntimeException"),
     // `setDaemon` on a thread that is already running, and (phase 1) a second
     // `start()`. A JDK's carries no message either way.
     (

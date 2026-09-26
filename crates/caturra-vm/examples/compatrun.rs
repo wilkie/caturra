@@ -146,13 +146,15 @@ fn main() {
     drop(vm);
     match outcome {
         Ok(_) => println!(
-            "{{\"ok\": true, \"stdout\": \"{}\"}}",
-            escape(&console.stdout_text())
+            "{{\"ok\": true, \"stdout\": \"{}\", \"stderr\": \"{}\"}}",
+            escape(&console.stdout_text()),
+            escape(&console.stderr_text())
         ),
         Err(err) => println!(
-            "{{\"ok\": false, \"error\": \"{}\", \"stdout\": \"{}\"}}",
+            "{{\"ok\": false, \"error\": \"{}\", \"stdout\": \"{}\", \"stderr\": \"{}\"}}",
             escape(&err.to_string()),
-            escape(&console.stdout_text())
+            escape(&console.stdout_text()),
+            escape(&console.stderr_text())
         ),
     }
 }

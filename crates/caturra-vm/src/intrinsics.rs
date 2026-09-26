@@ -13684,27 +13684,6 @@ pub fn invoke_static(
             // ends with a newline.
             "lineSeparator" => Ok(Some(JValue::Ref(Some(heap.alloc_string("\n"))))),
             "currentTimeMillis" => Ok(Some(JValue::Long(console.now_millis()))),
-            // `Thread.sleep`'s wait, asked of the HOST in slices: the browser
-            // worker really parks, tests move a virtual clock. A slice is at
-            // most 100 ms, so a later debugger poll can land inside a long
-            // sleep, and a host that answers short is simply asked for the
-            // rest. (The argument checks and the interrupt are the bundled
-            // `Thread`'s, in Java.)
-            "__sleep" => {
-                let millis = match args.first() {
-                    Some(JValue::Long(millis)) => u64::try_from(*millis).unwrap_or(0),
-                    _ => 0,
-                };
-                let mut left = millis;
-                while left > 0 {
-                    let slice = u32::try_from(left.min(100)).unwrap_or(100);
-                    // At least one: a host that reports no progress must not
-                    // turn a sleep into a hang.
-                    let waited = console.wait_millis(slice).clamp(1, slice);
-                    left -= u64::from(waited);
-                }
-                Ok(None)
-            }
             "nanoTime" => Ok(Some(JValue::Long(
                 console.now_millis().wrapping_mul(1_000_000),
             ))),

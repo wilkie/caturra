@@ -533,7 +533,7 @@
     "id": "parallel-streams",
     "category": "Collections",
     "title": "parallelStream, on one thread",
-    "summary": "caturra runs a single thread, and a JDK is allowed to answer a sequential stream from parallelStream() \u2014 so the pipeline is the same one, and isParallel() reports what a JDK reports.",
+    "summary": "caturra runs a pipeline on the thread that calls it, and a JDK is allowed to answer a sequential stream from parallelStream() \u2014 so the pipeline is the same one, and isParallel() reports what a JDK reports.",
     "main": "Parallel",
     "source": "import java.util.*;\nimport java.util.stream.*;\n\npublic class Parallel {\n    public static void main(String[] args) {\n        List<String> words = List.of(\"pear\", \"fig\", \"apple\");\n        System.out.println(words.parallelStream().map(String::length)\n                .collect(Collectors.toList()));\n        System.out.println(words.parallelStream().isParallel() + \" \"\n                + words.stream().isParallel());\n        System.out.println(words.stream().parallel().isParallel() + \" \"\n                + words.parallelStream().sequential().isParallel());\n        System.out.println(words.parallelStream().map(String::length).isParallel());\n        System.out.println(new TreeSet<>(words).parallelStream()\n                .collect(Collectors.joining(\"-\")));\n        System.out.println(Map.of(\"k\", 1).values().parallelStream().count());\n        System.out.println(IntStream.of(1, 2, 3).parallel().sum());\n    }\n}\n",
     "status": "supported",
@@ -640,6 +640,16 @@
     "expected": "main RUNNABLE\ntrue\nsleep interrupted, still flagged: false\n"
   },
   {
+    "id": "threads",
+    "category": "Library",
+    "title": "Threads",
+    "summary": "`start`, `join`, `synchronized` and `wait`/`notify`. Threads take turns on one engine thread, deterministically, so a program prints the same interleaving every run; what escapes a thread's `run` is reported the JDK's way and the others carry on.",
+    "main": "Threads",
+    "source": "public class Threads {\n    static int total = 0;\n\n    static synchronized void add(int n) {\n        total += n;\n    }\n\n    public static void main(String[] args) throws InterruptedException {\n        Thread[] workers = new Thread[3];\n        for (int i = 0; i < workers.length; i++) {\n            int id = i;\n            workers[i] = new Thread(() -> {\n                for (int n = 1; n <= 1000; n++) {\n                    add(id);\n                }\n            });\n            workers[i].start();\n        }\n        for (Thread worker : workers) {\n            worker.join();\n        }\n        System.out.println(total + \" \" + workers[0].getState());\n\n        Object lock = new Object();\n        Thread waiter = new Thread(() -> {\n            synchronized (lock) {\n                try {\n                    lock.wait();\n                    System.out.println(\"woken\");\n                } catch (InterruptedException e) {\n                    System.out.println(\"interrupted\");\n                }\n            }\n        });\n        waiter.start();\n        while (waiter.getState() != Thread.State.WAITING) {\n            Thread.sleep(1);\n        }\n        synchronized (lock) {\n            lock.notify();\n        }\n        waiter.join();\n    }\n}\n",
+    "status": "supported",
+    "expected": "3000 TERMINATED\nwoken\n"
+  },
+  {
     "id": "abstract-collections",
     "category": "Collections",
     "title": "The AbstractCollection skeletons",
@@ -650,14 +660,14 @@
     "reason": "java.util.AbstractList is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
-    "id": "threads",
+    "id": "concurrent",
     "category": "Library",
-    "title": "Threads",
-    "summary": "A second thread. `Thread.sleep`, `Thread.currentThread()` and `Thread` as a value work; starting another thread arrives with the scheduler (specs/CONCURRENCY.md).",
-    "main": "Threads",
-    "source": "public class Threads {\n    public static void main(String[] args) throws InterruptedException {\n        Thread worker = new Thread(() -> System.out.println(\"working\"));\n        worker.start();\n        worker.join();\n    }\n}\n",
+    "title": "java.util.concurrent",
+    "summary": "Executors, futures, latches, atomics and the concurrent collections. Threads, `synchronized` and `wait`/`notify` run; the package built on them is phase 2 of specs/CONCURRENCY.md, and each class is refused by name until then.",
+    "main": "Pool",
+    "source": "import java.util.concurrent.*;\n\npublic class Pool {\n    public static void main(String[] args) throws Exception {\n        ExecutorService pool = Executors.newFixedThreadPool(2);\n        Future<Integer> answer = pool.submit(() -> 6 * 7);\n        System.out.println(answer.get());\n        pool.shutdown();\n    }\n}\n",
     "status": "unsupported",
-    "reason": "Thread.start exists in Java, but caturra does not run a second thread yet \u2014 only the one the program is already on (calling run() directly runs the target on that thread, as it does in Java)"
+    "reason": "java.util.concurrent.ExecutorService is not supported by caturra (the class library covers the AP CS A subset)"
   },
   {
     "id": "class-modifiers",
@@ -976,7 +986,7 @@
     "id": "g-synchronized",
     "category": "Statements",
     "title": "synchronized",
-    "summary": "A program here runs on one thread, so a monitor is never contended: the lock is evaluated (a null one still throws) and the body runs.",
+    "summary": "A real monitor: the lock is evaluated once (a null one throws), held for the body however it ends, and contended between threads.",
     "main": "G",
     "source": "public class G {\n\n    public static void main(String[] args) throws Exception {\nObject lock = new Object();\n        synchronized (lock) {\n            System.out.println(\"locked\");\n        }\n        Object missing = null;\n        try {\n            synchronized (missing) {\n                System.out.println(\"never\");\n            }\n        } catch (NullPointerException e) {\n            System.out.println(\"null lock throws\");\n        }\n    }\n}\n",
     "status": "supported",

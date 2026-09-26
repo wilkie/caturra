@@ -6734,13 +6734,13 @@ fn stage6_compile_errors_match_javac_wording() {
             // `compare(Object,Object)`.
             "does not override abstract method compare(String,String) in Comparator",
         ),
-        // A `Thread` is an ordinary value now (specs/CONCURRENCY.md, phase 0);
-        // what is still refused is STARTING a second one, and by name. This
-        // case pinned `new Thread()` itself as refused — a limitation recorded
-        // as a requirement — and fails the moment the limit is lifted.
+        // Threads run (specs/CONCURRENCY.md, phase 1); what is still refused
+        // is a program's OWN uncaught-exception handler, and by name. This
+        // case pinned `new Thread()` and then `start()` as refused — each a
+        // limitation recorded as a requirement, lifted in turn.
         (
-            "class M { static void f() { new Thread(() -> {}).start(); } }",
-            "Thread.start exists in Java, but caturra does not run a second thread yet",
+            "class M { static void f() { Thread.currentThread().setUncaughtExceptionHandler(null); } }",
+            "Thread.setUncaughtExceptionHandler exists in Java, but caturra does not model uncaught-exception handlers yet",
         ),
         // A type argument caturra models as a variable AND as an element: a
         // `List<Scanner>` and a `Set<File>` are ordinary programs now (each

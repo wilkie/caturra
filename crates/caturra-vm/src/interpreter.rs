@@ -28,6 +28,8 @@ use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
+mod threads;
+
 /// State for one `run`: the loaded classes, heap, interned strings,
 /// intrinsic singletons, and the instruction/call-depth budgets.
 /// Where a stream's elements come from when a terminal re-reads them, and how
@@ -139,6 +141,12 @@ pub(crate) struct Interpreter<'run> {
     /// Every later active use throws `NoClassDefFoundError`.
     init_failed: HashSet<String>,
     remaining_instructions: u64,
+    /// The running thread's turn ends when `remaining_instructions` drops
+    /// below this; zero while it is the only live thread, so the check never
+    /// fires. See [`threads`].
+    slice_end: u64,
+    /// Every Java thread, and the monitors between them.
+    threads: threads::Threads<'run>,
     /// How many bytes of LIVE objects the program may hold. Checked after a
     /// collection: what a program has dropped does not count against it.
     heap_budget: usize,
@@ -336,6 +344,8 @@ impl<'run> Interpreter<'run> {
             temp_roots: Vec::new(),
             collect_always: std::env::var_os("CATURRA_GC_STRESS").is_some(),
             remaining_instructions: max_instructions,
+            slice_end: 0,
+            threads: threads::Threads::new(),
             max_call_depth,
             suspended_runs: Vec::new(),
             nested_frame_base: 0,
@@ -432,8 +442,47 @@ impl<'run> Interpreter<'run> {
         method: &'run MethodInfo,
         locals: Vec<JValue>,
     ) -> Result<Option<JValue>, VmError> {
+        self.execute_scheduled(class, method, locals, false)
+    }
+
+    /// Run a program's `main`: the same, except that `main` is a THREAD —
+    /// others it starts run alongside it, and the run lasts until the last
+    /// non-daemon one ends.
+    pub fn execute_main(
+        &mut self,
+        class: &'run ClassFile,
+        method: &'run MethodInfo,
+        locals: Vec<JValue>,
+    ) -> Result<Option<JValue>, VmError> {
+        self.execute_scheduled(class, method, locals, true)
+    }
+
+    /// Whether an uncaught exception's banner was already printed — by the
+    /// scheduler, when `main` died while other threads were still running.
+    #[must_use]
+    pub fn uncaught_reported(&self) -> bool {
+        self.threads.uncaught_reported
+    }
+
+    /// `main`'s name, as the program last set it.
+    #[must_use]
+    pub fn main_thread_name(&self) -> String {
+        self.thread_name(0)
+    }
+
+    fn execute_scheduled(
+        &mut self,
+        class: &'run ClassFile,
+        method: &'run MethodInfo,
+        locals: Vec<JValue>,
+        schedule: bool,
+    ) -> Result<Option<JValue>, VmError> {
         debug_assert!(self.frames.is_empty(), "execute is not re-entrant");
-        let result = self.execute_inner(class, method, locals);
+        // A watch evaluated while the program is paused must not switch
+        // threads: it runs on no thread at all.
+        let scheduling = std::mem::replace(&mut self.threads.scheduling, false);
+        let result = self.execute_inner(class, method, locals, schedule);
+        self.threads.scheduling = scheduling;
         if let Err(VmError::UncaughtException(message)) = result {
             let message = self.attach_stack_trace(message);
             self.frames.clear();
@@ -448,6 +497,7 @@ impl<'run> Interpreter<'run> {
         class: &'run ClassFile,
         method: &'run MethodInfo,
         locals: Vec<JValue>,
+        schedule: bool,
     ) -> Result<Option<JValue>, VmError> {
         // JVMS §5.5: invoking `main` is an active use, so the ENTRY class —
         // its superclasses and default-declaring superinterfaces included —
@@ -472,6 +522,7 @@ impl<'run> Interpreter<'run> {
             }
         }
         let frame = self.make_frame(class, method, locals)?;
+        self.threads.scheduling = schedule;
         self.run_loop(frame)
     }
 
@@ -517,6 +568,19 @@ impl<'run> Interpreter<'run> {
             })
         };
         let mut lines = Vec::new();
+        // Library frames are left out of a trace — except `Thread.run`, which
+        // a JDK's trace shows beneath every thread's target (and beneath a
+        // direct `run()` call), with the line JDK 11's source has there.
+        let library_line = |class: &str, method: &str| {
+            (class == "java/lang/Thread" && method == "run")
+                .then(|| String::from("java.base/java.lang.Thread.run(Thread.java:829)"))
+        };
+        if let Some(current) = &self.current_location
+            && is_injected_library(&current.code.source_file)
+            && let Some(line) = library_line(current.class_name, current.method_name)
+        {
+            lines.push(line);
+        }
         if let Some(current) = &self.current_location
             && !is_injected_library(&current.code.source_file)
             && let Some(line) = format_line(
@@ -530,10 +594,11 @@ impl<'run> Interpreter<'run> {
         }
         let trace_frames = |frames: &[Frame<'run>], lines: &mut Vec<String>| {
             for suspended in frames.iter().rev() {
+                let class_name = suspended.class.class_name().unwrap_or("<unknown>");
                 if is_injected_library(&suspended.code.source_file) {
+                    lines.extend(library_line(class_name, suspended.method_name));
                     continue;
                 }
-                let class_name = suspended.class.class_name().unwrap_or("<unknown>");
                 if let Some(line) = format_line(
                     class_name,
                     suspended.method_name,
@@ -1196,9 +1261,9 @@ impl<'run> Interpreter<'run> {
                 }
             }
         }
-        for value in &self.temp_roots {
+        for value in self.temp_roots.iter().copied().chain(self.threads.roots()) {
             if let JValue::Ref(Some(reference)) = value {
-                mark_ref(&mut marked, &mut work, *reference);
+                mark_ref(&mut marked, &mut work, reference);
             }
         }
         for fields in self.statics.values() {
@@ -1272,6 +1337,7 @@ impl<'run> Interpreter<'run> {
         let alive_by_value = |reference: HeapRef| alive(&reference);
         self.exception_traces
             .retain(|reference, _| alive(reference));
+        self.threads.prune(alive);
         self.map_views
             .retain(|(map, _), view| alive(map) && alive(view));
         self.checked_cursor_views.retain(alive);
@@ -1338,6 +1404,12 @@ impl<'run> Interpreter<'run> {
                         }
                         return Err(error);
                     }
+                }
+                // The running thread's turn is over (or it yielded).
+                if self.remaining_instructions < self.slice_end && self.may_switch() {
+                    frame.pc = pc;
+                    frame = self.switch_from(frame)?;
+                    continue 'frames;
                 }
 
                 let addr = pc;
@@ -2373,6 +2445,14 @@ impl<'run> Interpreter<'run> {
                         }
                         op::INVOKEVIRTUAL => {
                             let index = read_u16(bytes, &mut pc, &malformed)?;
+                            // `Object.wait`/`notify`/`notifyAll`: final, so
+                            // never a user method, and the scheduler's.
+                            if let Some(("java/lang/Object", name, descriptor)) =
+                                class.constant_pool.get_member_ref(index)
+                                && matches!(name, "wait" | "notify" | "notifyAll")
+                            {
+                                return self.object_monitor_call(&mut frame, addr, name, descriptor);
+                            }
                             if let Some(callee) =
                                 self.invoke_virtual_op(class, &mut frame, index, &malformed)?
                             {
@@ -2401,6 +2481,15 @@ impl<'run> Interpreter<'run> {
                                     return Ok(Flow::InitChain(chain));
                                 }
                                 self.static_inited.insert(site);
+                            }
+                            // The scheduler's calls (`Thread`, `synchronized`)
+                            // read their arguments in place: one that parks
+                            // leaves them for its re-execution.
+                            if target_class == "java/lang/System"
+                                && method_name.starts_with("__")
+                                && let Some(flow) = self.scheduler_call(&mut frame, addr, method_name)?
+                            {
+                                return Ok(flow);
                             }
                             // The descriptor was re-parsed into a fresh Vec every call.
                             let widths = if let Some(cached) = self.static_widths.get(&site) {
@@ -2721,11 +2810,24 @@ impl<'run> Interpreter<'run> {
                         }
                         continue 'frames;
                     }
+                    Ok(Flow::Park) => {
+                        frame = self.switch_from(frame)?;
+                        continue 'frames;
+                    }
                     Ok(Flow::Return(value)) => {
                         let box_return_as = frame.box_return_as.take();
                         let spent_locals = std::mem::take(&mut frame.locals);
                         let spent_stack = std::mem::take(&mut frame.stack);
                         match self.frames.pop() {
+                            // A thread's first frame returned: the thread is
+                            // over, and another runs — unless none is left.
+                            None if self.may_switch() => match self.thread_finished()? {
+                                Some(next) => {
+                                    frame = next;
+                                    continue 'frames;
+                                }
+                                None => return self.finish_run(value),
+                            },
                             None => return Ok(value),
                             Some(caller) => {
                                 frame = caller;
@@ -2763,6 +2865,31 @@ impl<'run> Interpreter<'run> {
                         };
                         if self.unwind_to_handler(&mut frame, addr, &error)? {
                             continue 'frames;
+                        }
+                        // Escaped a thread's first frame while others still
+                        // run: the default handler's banner, and the others
+                        // carry on.
+                        if let VmError::UncaughtException(message) = &error
+                            && self.may_switch()
+                            && self.others_keep_running()
+                        {
+                            let current = self.threads.current;
+                            let name = self.thread_name(current);
+                            self.console.stderr(
+                                format!("Exception in thread \"{name}\" {message}\n").as_bytes(),
+                            );
+                            if current == 0 {
+                                self.threads.main_failure = Some(message.clone());
+                                self.threads.uncaught_reported = true;
+                            }
+                            self.frames.clear();
+                            match self.thread_finished()? {
+                                Some(next) => {
+                                    frame = next;
+                                    continue 'frames;
+                                }
+                                None => return self.finish_run(None),
+                            }
                         }
                         return Err(error);
                     }
@@ -18052,8 +18179,9 @@ impl<'run> Interpreter<'run> {
             // override: `toString`, `hashCode`, `equals` and `getClass` are
             // answered by the same defaults an ordinary call gets, so a
             // validator checking a student's `toString` reflectively sees what
-            // `println` would show. The monitor methods and `clone` are not
-            // modelled at all, and say so rather than answering.
+            // `println` would show. The monitor methods (which the scheduler
+            // answers only as direct calls) and `clone` say so rather than
+            // answering.
             if declaring == "java.lang.Object"
                 && matches!(
                     name.as_str(),
@@ -18061,9 +18189,10 @@ impl<'run> Interpreter<'run> {
                 )
             {
                 return Err(VmError::Unsupported(format!(
-                    "Method.invoke(): java.lang.Object.{name} is not modelled here — caturra runs \
-                     one thread and holds no monitors, and the rest of that list a JDK refuses \
-                     outright for access."
+                    "Method.invoke(): java.lang.Object.{name} is not modelled here — caturra's \
+                     monitor methods run only as direct calls (a reflective one is native code, \
+                     where no thread can be set aside to wait), and the rest of that list a JDK \
+                     refuses outright for access."
                 )));
             }
             if declaring == "java.lang.Object"
@@ -21009,6 +21138,9 @@ enum Flow<'run> {
     /// Static initializers must run first (execution order), then the
     /// current instruction re-executes (`frame.pc` already rewound).
     InitChain(Vec<Frame<'run>>),
+    /// The running thread parked (`frame.pc` already rewound to the call,
+    /// which re-executes when it is resumed): run another.
+    Park,
 }
 
 /// The outcome of dispatching a virtual call on a user object.

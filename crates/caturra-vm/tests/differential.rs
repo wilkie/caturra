@@ -225,6 +225,16 @@ fn run_with_jdk_files(
     stdin: &str,
     files: &[(&str, &str)],
 ) -> String {
+    run_with_jdk_both(class_name, source, stdin, files).0
+}
+
+/// A JDK run's standard output AND standard error.
+fn run_with_jdk_both(
+    class_name: &str,
+    source: &str,
+    stdin: &str,
+    files: &[(&str, &str)],
+) -> (String, String) {
     // Two tests may legitimately declare the same class name; give each its
     // own directory, or javac's output races between them.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -303,7 +313,10 @@ fn run_with_jdk_files(
         "java failed for {class_name}: {}",
         String::from_utf8_lossy(&run.stderr)
     );
-    String::from_utf8_lossy(&run.stdout).into_owned()
+    (
+        String::from_utf8_lossy(&run.stdout).into_owned(),
+        String::from_utf8_lossy(&run.stderr).into_owned(),
+    )
 }
 
 fn run_with_caturra_files(
@@ -312,6 +325,16 @@ fn run_with_caturra_files(
     stdin: &str,
     files: &[(&str, &str)],
 ) -> String {
+    run_with_caturra_both(class_name, source, stdin, files).0
+}
+
+/// A caturra run's standard output AND standard error.
+fn run_with_caturra_both(
+    class_name: &str,
+    source: &str,
+    stdin: &str,
+    files: &[(&str, &str)],
+) -> (String, String) {
     // A staged `.java` file is another SOURCE, not data: a real program is
     // several files, and what one file MEANS in another is only checkable with
     // at least two of them. javac finds them itself (they sit beside the main
@@ -357,7 +380,7 @@ fn run_with_caturra_files(
         "caturra run failed for {class_name}: {result:?}; stderr: {}",
         console.stderr_text()
     );
-    console.stdout_text()
+    (console.stdout_text(), console.stderr_text())
 }
 
 fn assert_same_output(class_name: &str, source: &str) {
@@ -405,6 +428,23 @@ macro_rules! differential_test {
                 return;
             }
             assert_same_output($class, $source);
+        }
+    };
+}
+
+/// The same, comparing standard ERROR too — for what a program prints
+/// there without failing (a thread's uncaught exception).
+macro_rules! differential_test_stderr {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            let expected = run_with_jdk_both($class, $source, "", &[]);
+            let actual = run_with_caturra_both($class, $source, "", &[]);
+            assert_eq!(actual, expected, "stdout/stderr diverge for {}", $class);
         }
     };
 }
@@ -52708,14 +52748,6 @@ public class TailT1 {
 // every missing name at once; these pin one per family, so a family cannot
 // quietly come back as a typo-shaped error.
 
-// `wait`/`notify`/`notifyAll` are `Object`'s, so every receiver has them.
-// caturra runs a program on one thread: there is no second thread to wake.
-stricter_than_javac!(
-    strict_no_thread_to_wait_for,
-    "StrictWait",
-    "public class StrictWait { static void r() throws Exception { new Object().wait(); } }"
-);
-
 // A `Spliterator` is a parallel-decomposition handle, and the documentation
 // shows one on every collection — so this must explain itself rather than read
 // as a missing method.
@@ -54074,14 +54106,15 @@ refused_at_run!(
     "a library value has no class file here"
 );
 
-// caturra runs one thread, so `Object`'s monitor methods have nothing to do —
-// and a JDK refuses `clone`, `finalize` and `registerNatives` outright for
-// access, which caturra does not model either.
+// `Object`'s monitor methods run as direct calls only: a reflective call is
+// native code, where no thread can be set aside to wait — and a JDK refuses
+// `clone`, `finalize` and `registerNatives` outright for access, which caturra
+// does not model either.
 refused_at_run!(
     run_no_monitors_through_reflection,
     "ReflectiveMonitor",
     "import java.lang.reflect.*;\npublic class ReflectiveMonitor { public static void main(String[] a) throws Exception { Object.class.getDeclaredMethod(\"notify\").invoke(new ReflectiveMonitor()); } }",
-    "caturra runs one thread and holds no monitors"
+    "monitor methods run only as direct calls"
 );
 
 // The primitive functional interfaces, held as VALUES. A parameter kind names
@@ -62200,28 +62233,217 @@ public class CR {
 "#
 );
 
-// A second thread waits for the scheduler (phase 1). Refused by name, with the
-// way to run the target on the thread the program is already on.
-stricter_than_javac!(
-    strict_no_second_thread_yet,
-    "StrictSecondThread",
-    "public class StrictSecondThread { public static void main(String[] a) { new Thread(() -> System.out.println(1)).start(); } }"
+// `java.lang.Thread`, phase 1 of specs/CONCURRENCY.md: a second thread RUNS.
+// `start` returns at once and the thread runs when the scheduler next picks it;
+// `join` waits for it; its states are NEW, RUNNABLE, TERMINATED (and a finished
+// thread's `toString` has left its group); a second `start` is refused with no
+// message; `wait`/`notify` without the monitor are IllegalMonitorStateException
+// with none either (Java 11 — a later JDK added words); a `synchronized` counter
+// shared by four threads loses nothing; an interrupt ends a sleep, a join and a
+// wait, each the JDK's way; `join(ms)` gives up; ids and names count on.
+differential_test!(
+    a_second_thread_runs,
+    "T1",
+    r#"
+public class T1 {
+    static int count = 0;
+    static synchronized void inc() { count++; }
+    public static void main(String[] args) throws Exception {
+        Thread t = new Thread(() -> System.out.println("in " + Thread.currentThread().getName()));
+        System.out.println(t.getState() + " " + t.isAlive() + " " + t);
+        t.start();
+        t.join();
+        System.out.println(t.getState() + " " + t.isAlive() + " " + t);
+        try { t.start(); } catch (IllegalThreadStateException e) { System.out.println("again: " + e.getMessage()); }
+        Object o = new Object();
+        try { o.wait(); } catch (IllegalMonitorStateException e) { System.out.println("wait: " + e.getMessage()); }
+        try { o.notify(); } catch (IllegalMonitorStateException e) { System.out.println("notify: " + e.getMessage()); }
+        try { o.notifyAll(); } catch (IllegalMonitorStateException e) { System.out.println("notifyAll: " + e.getMessage()); }
+        Thread[] ts = new Thread[4];
+        for (int i = 0; i < 4; i++) { ts[i] = new Thread(() -> { for (int j = 0; j < 10000; j++) inc(); }); ts[i].start(); }
+        for (Thread x : ts) x.join();
+        System.out.println(count);
+        Thread s = new Thread(() -> { try { Thread.sleep(10000); System.out.println("woke"); } catch (InterruptedException e) { System.out.println("interrupted: " + e.getMessage() + " " + Thread.currentThread().isInterrupted()); } });
+        s.start();
+        while (s.getState() != Thread.State.TIMED_WAITING) Thread.sleep(1);
+        System.out.println(s.getState()); s.interrupt(); s.join();
+        Thread.currentThread().interrupt();
+        try { s.join(); System.out.println("join terminated ok"); } catch (InterruptedException e) { System.out.println("join: " + e.getMessage()); }
+        Thread.currentThread().interrupt();
+        Thread w = new Thread(() -> { try { Thread.sleep(100);} catch (InterruptedException e) {} }); w.start();
+        try { w.join(); } catch (InterruptedException e) { System.out.println("join2: " + e.getMessage() + " " + Thread.currentThread().isInterrupted()); }
+        synchronized (o) {
+            Thread.currentThread().interrupt();
+            try { o.wait(); } catch (InterruptedException e) { System.out.println("wait int: " + e.getMessage()); }
+        }
+        Thread l = new Thread(() -> { try { Thread.sleep(500);} catch (InterruptedException e) {} }); l.start();
+        l.join(100); System.out.println("after join(100): " + l.isAlive());
+        l.join();
+        Thread q = new Thread("named"); System.out.println(q.getName() + " " + q.getId());
+        Thread r = new Thread(); System.out.println(r.getName());
+        try { l.join(-1); } catch (IllegalArgumentException e) { System.out.println("join-1: " + e.getMessage()); }
+        synchronized (o) { try { o.wait(-1);} catch (IllegalArgumentException e) { System.out.println("wait-1: " + e.getMessage()); } }
+        synchronized (o) { o.wait(10); System.out.println("waited"); }
+        Thread n = new Thread(() -> {});
+        n.interrupt(); System.out.println("new: " + n.isInterrupted());
+        n.start(); n.join(); n.interrupt(); System.out.println("dead: " + n.isInterrupted());
+        System.out.println(Thread.holdsLock(o));
+        synchronized (o) { System.out.println(Thread.holdsLock(o)); }
+        Thread j = new Thread(() -> {}); j.join(); System.out.println("join unstarted ok " + j.getState());
+        Thread self = new Thread(() -> { Thread.currentThread().interrupt(); System.out.println("self " + Thread.interrupted() + " " + Thread.interrupted()); });
+        self.start(); self.join();
+        try { Thread.holdsLock(null); } catch (NullPointerException e) { System.out.println("holdsLock null " + e.getMessage()); }
+    }
+}
+"#
 );
 
-// Which thread holds a monitor is answered by the monitors of phase 1.
-stricter_than_javac!(
-    strict_no_monitor_ownership_yet,
-    "StrictHoldsLock",
-    "public class StrictHoldsLock { public static void main(String[] a) { System.out.println(Thread.holdsLock(a)); } }"
+// What a thread's state says while it is parked: WAITING inside `wait()` and
+// inside a `join()` with no timeout, BLOCKED at a monitor another thread holds
+// (and after a notify, until the monitor is free again), TIMED_WAITING in
+// `sleep`. Each is polled for rather than slept for, so a loaded JDK cannot
+// reach it late; a daemon still sleeping does not keep the program alive.
+differential_test!(
+    a_parked_thread_s_state,
+    "T3",
+    r#"
+public class T3 {
+    static void until(Thread t, Thread.State s) throws InterruptedException {
+        while (t.getState() != s) Thread.sleep(1);
+        System.out.println(t.getName() + " " + s);
+    }
+    public static void main(String[] args) throws Exception {
+        Thread d = new Thread(() -> { try { Thread.sleep(100000); } catch (InterruptedException e) {} System.out.println("never"); });
+        d.setDaemon(true); d.start();
+        until(d, Thread.State.TIMED_WAITING);
+        Object lock = new Object();
+        Thread w = new Thread(() -> { synchronized (lock) { try { lock.wait(); } catch (InterruptedException e) {} System.out.println("notified"); } }, "w");
+        w.start();
+        until(w, Thread.State.WAITING);
+        synchronized (lock) { lock.notify(); until(w, Thread.State.BLOCKED); }
+        w.join();
+        Thread b = new Thread(() -> { synchronized (lock) { System.out.println("got it"); } }, "b");
+        synchronized (lock) { b.start(); until(b, Thread.State.BLOCKED); }
+        b.join();
+        Thread main = Thread.currentThread();
+        Thread j = new Thread(() -> { try { main.join(); } catch (InterruptedException e) {} }, "j");
+        j.setDaemon(true); j.start();
+        until(j, Thread.State.WAITING);
+        System.out.println(main.getState() + " " + main.isAlive() + " " + d.isDaemon());
+    }
+}
+"#
 );
 
-// A call caturra refuses still THROWS what Java declares for it: `join()` is
-// refused until the scheduler exists, but its `InterruptedException` is real,
-// so an uncaught one is javac's own first error — and a `catch` around it is
-// legal rather than "never thrown in body of corresponding try statement",
-// which blamed the one line of the program that was right.
+// Threads that hand work over through `wait`/`notifyAll` on one monitor — a
+// one-slot buffer, so the order is fixed by the handshake rather than by
+// timing; and sleeps on two threads OVERLAP, ending in the order they were
+// due. (That they end in about the longer time is the session test's to time:
+// a loaded JDK here can take any time at all.)
+differential_test!(
+    threads_hand_over_through_a_monitor,
+    "T5",
+    r#"
+public class T5 {
+    static final Object lock = new Object();
+    static Integer slot = null;
+    public static void main(String[] args) throws Exception {
+        Thread producer = new Thread(() -> {
+            for (int i = 0; i < 5; i++) {
+                synchronized (lock) {
+                    while (slot != null) { try { lock.wait(); } catch (InterruptedException e) { return; } }
+                    slot = i; System.out.println("produced " + i); lock.notifyAll();
+                }
+            }
+        });
+        Thread consumer = new Thread(() -> {
+            for (int i = 0; i < 5; i++) {
+                synchronized (lock) {
+                    while (slot == null) { try { lock.wait(); } catch (InterruptedException e) { return; } }
+                    System.out.println("consumed " + slot); slot = null; lock.notifyAll();
+                }
+            }
+        });
+        consumer.start(); producer.start(); producer.join(); consumer.join();
+        long t0 = System.currentTimeMillis();
+        Thread s1 = new Thread(() -> { try { Thread.sleep(300); } catch (InterruptedException e) {} System.out.println("s1"); });
+        Thread s2 = new Thread(() -> { try { Thread.sleep(100); } catch (InterruptedException e) {} System.out.println("s2"); });
+        s1.start(); s2.start(); s1.join(); s2.join();
+        long took = System.currentTimeMillis() - t0;
+        System.out.println("overlapped: " + (took >= 300));
+    }
+}
+"#
+);
+
+// What escapes a thread's `run` is the default handler's: `Exception in thread
+// "Thread-0"`, the trace — ending in `Thread.run` beneath a target, as a JDK's
+// does, and not when `run` is overridden — on standard error; the thread ends
+// and the program carries on to a normal exit.
+differential_test_stderr!(
+    an_uncaught_exception_ends_only_its_thread,
+    "T2",
+    r#"
+public class T2 {
+    static void boom() { throw new IllegalStateException("bad"); }
+    static class W extends Thread { public void run() { Object x = null; x.toString(); } }
+    public static void main(String[] args) throws Exception {
+        Thread t = new Thread(() -> boom());
+        t.start(); t.join();
+        System.out.println("after " + t.getState());
+        W w = new W(); w.start(); w.join();
+        Thread n = new Thread(() -> { throw new RuntimeException("named"); }, "worker");
+        n.start(); n.join();
+        System.out.println("main ends");
+    }
+}
+"#
+);
+
+// Every thread parked and none waiting on time: a JDK hangs for ever, and a
+// browser tab must not. The run ends with a thread dump instead.
+refused_at_run!(
+    refused_every_thread_blocked,
+    "Deadlock",
+    r#"
+public class Deadlock {
+    public static void main(String[] args) throws Exception {
+        Object a = new Object(), b = new Object();
+        Thread t = new Thread(() -> { synchronized (b) { try { Thread.sleep(10); } catch (InterruptedException e) {} synchronized (a) { System.out.println("t"); } } });
+        t.start();
+        synchronized (a) { Thread.sleep(10); synchronized (b) { System.out.println("main"); } }
+    }
+}
+"#,
+    "\"main\" blocked on an Object held by \"Thread-0\""
+);
+
+// A callback that library code invoked (a forEach body, a comparator) runs
+// with that code on the host stack, so its thread cannot be set aside for
+// another: a `join` there could never end, and says so. A `sleep` there still
+// sleeps.
+refused_at_run!(
+    refused_join_inside_a_callback,
+    "NestedJoin",
+    r#"
+import java.util.*;
+public class NestedJoin {
+    public static void main(String[] args) throws Exception {
+        Thread t = new Thread(() -> System.out.println("t runs"));
+        t.start();
+        List.of(1).forEach(x -> { try { Thread.sleep(5); t.join(); } catch (InterruptedException e) {} });
+    }
+}
+"#,
+    "cannot wait for \"Thread-0\" inside a callback"
+);
+
+// `join()` declares `InterruptedException`, so an unhandled one is javac's own
+// first error — and a `catch` around it is legal rather than "never thrown in
+// body of corresponding try statement". (When `join` was refused, phase 0,
+// this is what kept the refusal from blaming the one right line.)
 differential_wording!(
-    a_refused_join_still_throws,
+    join_declares_interrupted,
     "RefusedJoin",
     r#"
 public class RefusedJoin {

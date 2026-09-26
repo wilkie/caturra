@@ -141,6 +141,36 @@ public class Main {
     expect((stdout.at(-1)?.at ?? 0) - (stdout[0]?.at ?? 0)).toBeGreaterThanOrEqual(195);
   });
 
+  it("overlaps two threads' sleeps", async () => {
+    const session = await createJvmSession();
+    const compiled = session.compile([
+      {
+        path: 'Main.java',
+        text: `
+public class Main {
+    public static void main(String[] args) throws InterruptedException {
+        Thread slow = new Thread(() -> { try { Thread.sleep(300); } catch (InterruptedException e) {} System.out.println("slow"); });
+        Thread fast = new Thread(() -> { try { Thread.sleep(100); } catch (InterruptedException e) {} System.out.println("fast"); });
+        slow.start(); fast.start(); slow.join(); fast.join();
+        System.out.println("done");
+    }
+}
+`,
+      },
+    ]);
+    expect(compiled.success).toBe(true);
+
+    const began = performance.now();
+    const stdout: string[] = [];
+    const result = session.run('Main', { onStdout: (text) => stdout.push(text) });
+    const took = performance.now() - began;
+    expect(result.status).toBe('completed');
+    expect(stdout.join('')).toBe('fast\nslow\ndone\n');
+    // The two sleeps ran at the same time: about 300 ms, not 400.
+    expect(took).toBeGreaterThanOrEqual(295);
+    expect(took).toBeLessThan(395);
+  });
+
   it('runs Hello World and streams stdout', async () => {
     const session = await createJvmSession();
     const compiled = session.compile([{ path: 'Main.java', text: HELLO_WORLD }]);

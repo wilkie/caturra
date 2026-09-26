@@ -677,6 +677,14 @@ fn call_throws(
     ctx: &mut Ctx,
 ) -> ThrownSet {
     let arity = args.len();
+    // `Object.wait` on any receiver: final, so it is always `Object`'s, and
+    // it declares InterruptedException.
+    if method == "wait" && arity <= 2 {
+        let mut out = ThrownSet::default();
+        out.push(Exc::Lib("java/lang/InterruptedException"));
+        ctx.report_escapes(&out, handlers, span);
+        return out;
+    }
     match receiver {
         None | Some(Expr::This { .. }) => {
             let own = ctx.class.name.clone();

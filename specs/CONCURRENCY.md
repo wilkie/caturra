@@ -1,6 +1,6 @@
 # CONCURRENCY — Java threads on a single-threaded engine
 
-- **Status:** accepted — phase 0 implemented 2026-09-25; phases 1–3 pending
+- **Status:** accepted — phases 0 and 1 implemented 2026-09-25; phases 2–3 pending
 - **Date:** 2026-09-25
 - **Refines:** [EXECUTION.md](EXECUTION.md), [RUNTIME.md](RUNTIME.md)
 - **Amends:** the "Threads" non-goal in [SCOPE.md](SCOPE.md)
@@ -373,6 +373,34 @@ scheduler and parking are perhaps 800 lines, the monitors 300, the Thread
 class (bundled Java plus intrinsics) 400, the host hook 100, and the pins as
 many again. The risk is not size but the number of places that must agree —
 the same shape every unit in LANGUAGE.md has had._
+
+_Done (2026-09-25)._ As built, and where it differs from the design above:
+
+- The scheduler is `crates/caturra-vm/src/interpreter/threads.rs`. The
+  quantum is 10,000 instructions: a 100,000-increment two-thread race loses
+  updates, and a thread of a few `println`s finishes inside its first slice.
+  The slice is one compare at the safepoint (`remaining_instructions <
+slice_end`), zero while only one thread is alive.
+- Parking is the rewind idiom for EVERY blocking call, not only
+  `monitorenter`: the call leaves its arguments on the stack, parks, and on
+  re-execution reads `wake` (how the park ended). The scheduler settles
+  runnability — and re-takes a waiter's monitor at its count — when it
+  chooses the thread, so a woken thread never runs an instruction it may not.
+- `synchronized` is desugared by the parser (`__monitorEnter`, a `try`, and
+  `__monitorExit` in its `finally`), not emitted as `monitorenter`/
+  `monitorexit`, and a `synchronized` method is its body wrapped the same way:
+  codegen's `finally` machinery already handles every abrupt exit. No
+  `ACC_SYNCHRONIZED` flag is written.
+- The bundled `Thread` keeps no run state; the scheduler does, keyed by the
+  `Thread` object. A thread's first frame is the bundled `Thread.__entry`,
+  which calls `run` and prints the default handler's banner for what escapes —
+  so the handler is Java, as a JDK's is. The trace shows
+  `java.base/java.lang.Thread.run(Thread.java:829)`, the one library frame a
+  trace shows here.
+- The uncaught handlers themselves (`setUncaughtExceptionHandler` and the
+  default) stay refused by name; the default behaviour is what runs.
+- Not yet: the debugger's thread list (the snapshot still shows only the
+  running thread's frames).
 
 **Phase 2 — `java.util.concurrent`, the course-sized part.** `Executors.
 newFixedThreadPool/newSingleThreadExecutor/newCachedThreadPool`,

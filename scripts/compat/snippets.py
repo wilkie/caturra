@@ -1880,7 +1880,7 @@ public class Summaries {
         id="parallel-streams",
         category="Collections",
         title="parallelStream, on one thread",
-        summary="caturra runs a single thread, and a JDK is allowed to answer a sequential stream from parallelStream() — so the pipeline is the same one, and isParallel() reports what a JDK reports.",
+        summary="caturra runs a pipeline on the thread that calls it, and a JDK is allowed to answer a sequential stream from parallelStream() — so the pipeline is the same one, and isParallel() reports what a JDK reports.",
         main="Parallel",
         source="""
 import java.util.*;
@@ -2327,6 +2327,59 @@ public class Sleepy {
 }
 ''',
     ),
+    dict(
+        id="threads",
+        category="Library",
+        title="Threads",
+        summary="`start`, `join`, `synchronized` and `wait`/`notify`. Threads take turns on one engine thread, deterministically, so a program prints the same interleaving every run; what escapes a thread's `run` is reported the JDK's way and the others carry on.",
+        main="Threads",
+        source='''
+public class Threads {
+    static int total = 0;
+
+    static synchronized void add(int n) {
+        total += n;
+    }
+
+    public static void main(String[] args) throws InterruptedException {
+        Thread[] workers = new Thread[3];
+        for (int i = 0; i < workers.length; i++) {
+            int id = i;
+            workers[i] = new Thread(() -> {
+                for (int n = 1; n <= 1000; n++) {
+                    add(id);
+                }
+            });
+            workers[i].start();
+        }
+        for (Thread worker : workers) {
+            worker.join();
+        }
+        System.out.println(total + " " + workers[0].getState());
+
+        Object lock = new Object();
+        Thread waiter = new Thread(() -> {
+            synchronized (lock) {
+                try {
+                    lock.wait();
+                    System.out.println("woken");
+                } catch (InterruptedException e) {
+                    System.out.println("interrupted");
+                }
+            }
+        });
+        waiter.start();
+        while (waiter.getState() != Thread.State.WAITING) {
+            Thread.sleep(1);
+        }
+        synchronized (lock) {
+            lock.notify();
+        }
+        waiter.join();
+    }
+}
+''',
+    ),
 ]
 
 # Real Java 11 that caturra does NOT model. javac must ACCEPT these — that is what
@@ -2365,17 +2418,20 @@ public class Skeleton {
 ''',
     ),
     dict(
-        id="threads",
+        id="concurrent",
         category="Library",
-        title="Threads",
-        summary="A second thread. `Thread.sleep`, `Thread.currentThread()` and `Thread` as a value work; starting another thread arrives with the scheduler (specs/CONCURRENCY.md).",
-        main="Threads",
+        title="java.util.concurrent",
+        summary="Executors, futures, latches, atomics and the concurrent collections. Threads, `synchronized` and `wait`/`notify` run; the package built on them is phase 2 of specs/CONCURRENCY.md, and each class is refused by name until then.",
+        main="Pool",
         source='''
-public class Threads {
-    public static void main(String[] args) throws InterruptedException {
-        Thread worker = new Thread(() -> System.out.println("working"));
-        worker.start();
-        worker.join();
+import java.util.concurrent.*;
+
+public class Pool {
+    public static void main(String[] args) throws Exception {
+        ExecutorService pool = Executors.newFixedThreadPool(2);
+        Future<Integer> answer = pool.submit(() -> 6 * 7);
+        System.out.println(answer.get());
+        pool.shutdown();
     }
 }
 ''',
@@ -2624,8 +2680,8 @@ GRAMMAR = [
          summary="A runtime no-op — assertions are off by default (only `-ea` enables them) — but the condition is still type-checked, as javac does.", main="G",
          source=_prog('assert 1 + 1 == 2 : "math";\n        System.out.println("asserted");')),
     dict(id="g-synchronized", category="Statements", title="synchronized",
-         summary=("A program here runs on one thread, so a monitor is never contended: "
-                  "the lock is evaluated (a null one still throws) and the body runs."),
+         summary=("A real monitor: the lock is evaluated once (a null one throws), "
+                  "held for the body however it ends, and contended between threads."),
          main="G",
          source=_prog('Object lock = new Object();\n        synchronized (lock) {\n'
                       '            System.out.println("locked");\n        }\n'

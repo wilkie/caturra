@@ -236,14 +236,19 @@ impl<'host> Vm<'host> {
         ));
         let locals = vec![JValue::Ref(Some(args_array))];
 
-        match interpreter.execute(class, main, locals) {
+        match interpreter.execute_main(class, main, locals) {
             Ok(_) => Ok(ExitStatus::Completed),
             // System.exit unwound the stack: a clean, coded termination.
             Err(VmError::SystemExit(code)) => Ok(ExitStatus::Exited(code)),
             Err(VmError::UncaughtException(message)) => {
-                // Match the shape of the real `java` launcher's output.
-                self.console
-                    .stderr(format!("Exception in thread \"main\" {message}\n").as_bytes());
+                // Match the shape of the real `java` launcher's output —
+                // unless `main` died while other threads ran on, when the
+                // banner was printed at the moment it happened.
+                if !interpreter.uncaught_reported() {
+                    let name = interpreter.main_thread_name();
+                    self.console
+                        .stderr(format!("Exception in thread \"{name}\" {message}\n").as_bytes());
+                }
                 Err(VmError::UncaughtException(message))
             }
             Err(other) => Err(other),

@@ -13169,44 +13169,22 @@ const STRING_STATIC_METHODS: &[BuiltinMethod] = &[
     },
 ];
 
+/// What stands in for a program's own uncaught-exception handler: the
+/// default one, which prints the trace, is what runs.
+const NO_HANDLERS: &str =
+    "caturra does not model uncaught-exception handlers yet; the default one runs \
+     (it prints \"Exception in thread ...\" and the trace, and the thread ends)";
+
 /// Real Java 11 members caturra cannot model, per class, with the honest
 /// reason — students find these in documentation, and "cannot find
 /// symbol" would read as a bug.
 #[rustfmt::skip]
-/// Why a phase-0 `Thread` (specs/CONCURRENCY.md) will not run a second one.
-const NO_SECOND_THREAD: &str = "caturra does not run a second thread yet — only the one the program \
-     is already on (calling run() directly runs the target on that thread, as it does in Java)";
-
 const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
-    // `java.lang.Thread`, phase 0: the thread a program is on, and nothing
-    // that needs another. Each of these waits for the scheduler.
-    ("Thread", "start", NO_SECOND_THREAD),
-    ("Thread", "join", NO_SECOND_THREAD),
-    (
-        "Thread",
-        "holdsLock",
-        "caturra does not model monitor ownership yet",
-    ),
-    (
-        "Thread",
-        "getUncaughtExceptionHandler",
-        "caturra does not run a second thread yet, so no handler is ever asked",
-    ),
-    (
-        "Thread",
-        "setUncaughtExceptionHandler",
-        "caturra does not run a second thread yet, so no handler is ever asked",
-    ),
-    (
-        "Thread",
-        "getDefaultUncaughtExceptionHandler",
-        "caturra does not run a second thread yet, so no handler is ever asked",
-    ),
-    (
-        "Thread",
-        "setDefaultUncaughtExceptionHandler",
-        "caturra does not run a second thread yet, so no handler is ever asked",
-    ),
+    // `java.lang.Thread`: what the scheduler does not model.
+    ("Thread", "getUncaughtExceptionHandler", NO_HANDLERS),
+    ("Thread", "setUncaughtExceptionHandler", NO_HANDLERS),
+    ("Thread", "getDefaultUncaughtExceptionHandler", NO_HANDLERS),
+    ("Thread", "setDefaultUncaughtExceptionHandler", NO_HANDLERS),
     (
         "Thread",
         "getStackTrace",
@@ -14035,17 +14013,19 @@ fn receiver_class_name(receiver: JType) -> &'static str {
     }
 }
 
+/// `Object`'s monitor methods — `wait()`, `wait(long)`, `wait(long, int)`,
+/// `notify()`, `notifyAll()`. Every one is final, so on ANY reference these
+/// names at these arities mean `Object`'s, whatever the receiver's class.
+fn is_monitor_call(method: &str, argc: usize) -> bool {
+    matches!((method, argc), ("notify" | "notifyAll", 0) | ("wait", 0..=2))
+}
+
 /// The honest not-supported reason for a class member, if known.
 fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
     // Two names EVERY receiver has, because they come from `Object` and from
     // `Collection`. A row per class is a class to forget: `spliterator` had
     // seven rows and still said "cannot find symbol" on a `Stack`, on
     // `Arrays`, and on both stream kinds.
-    if matches!(method, "wait" | "notify" | "notifyAll") {
-        return Some(
-            "caturra runs a program on one thread, so there is no other thread to wait for or to wake",
-        );
-    }
     // A `Spliterator` is a parallel-decomposition handle. caturra runs on one
     // thread and models no such type, so there is nothing honest to answer —
     // and "cannot find symbol" would read as a bug for a method the
@@ -22115,10 +22095,28 @@ const LONG_METHODS: &[BuiltinMethod] = &[
 
 const SYSTEM_METHODS: &[BuiltinMethod] = &[
     bm("currentTimeMillis", &[], BRet::Long, "()J"),
-    // The host's wait, for the bundled `Thread.sleep` (see
-    // `specs/CONCURRENCY.md`). Reserved-prefixed, so only bundled source —
-    // which reaches it as `__System.__sleep` — ever names it.
-    bm("__sleep", &[L], BRet::Void, "(J)V"),
+    // The scheduler's surface, for the bundled `Thread` and the desugared
+    // `synchronized` (see `specs/CONCURRENCY.md`). Reserved-prefixed, so only
+    // bundled source and the parser — which reach them as `__System.__…` —
+    // ever name them. `__sleep`/`__join` answer whether an interrupt ended
+    // the wait; the `Object` parameters are `Thread`s.
+    bm("__sleep", &[L], BRet::Boolean, "(J)Z"),
+    bm("__join", &[BParam::Object, L], BRet::Boolean, "(Ljava/lang/Object;J)Z"),
+    bm("__start", &[BParam::Object, BParam::Boolean], BRet::Void, "(Ljava/lang/Object;Z)V"),
+    bm("__setMain", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm("__currentThread", &[], BRet::Object, "()Ljava/lang/Object;"),
+    bm("__threadStatus", &[BParam::Object], BRet::Int, "(Ljava/lang/Object;)I"),
+    bm("__interrupt", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm(
+        "__isInterrupted",
+        &[BParam::Object, BParam::Boolean],
+        BRet::Boolean,
+        "(Ljava/lang/Object;Z)Z",
+    ),
+    bm("__yield", &[], BRet::Void, "()V"),
+    bm("__holdsLock", &[BParam::Object], BRet::Boolean, "(Ljava/lang/Object;)Z"),
+    bm("__monitorEnter", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm("__monitorExit", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
     // `System.gc()` is a REQUEST in Java ("the Java Virtual Machine expends
     // effort"), and it is one here too: the collector runs at the next
     // safepoint, which is the next instruction.
@@ -34611,6 +34609,9 @@ impl BodyGen<'_> {
         } else {
             method
         };
+        if receiver_ty.is_reference() && is_monitor_call(method, args.len()) {
+            return self.monitor_call(method, args);
+        }
         // `Comparator` combinators (`reversed`/`thenComparing`) on a comparator
         // value — the bundled `__Comparator` interface has no such methods, so
         // caturra builds a derived comparator itself.
@@ -38467,7 +38468,45 @@ impl BodyGen<'_> {
     /// A bare call `method(args)`: static → invokestatic; instance →
     /// through the implicit `this`.
     #[allow(clippy::option_option, clippy::too_many_lines)]
+    /// One of `Object`'s monitor methods, its receiver already on the stack:
+    /// the arguments, converted as `(long)` and `(long, int)` take them, and
+    /// the call on `java/lang/Object`, which the VM's scheduler answers.
+    fn monitor_call(&mut self, method: &str, args: &[Expr]) -> Option<Option<JType>> {
+        if !is_monitor_call(method, args.len()) {
+            return None;
+        }
+        let params: &[JType] = match args.len() {
+            0 => &[],
+            1 => &[JType::Long],
+            _ => &[JType::Long, JType::Int],
+        };
+        let mut slots = 1u16;
+        for (arg, param) in args.iter().zip(params) {
+            let ty = self.expr_in_argument(arg);
+            if ty == JType::Error {
+                return Some(None);
+            }
+            self.convert_for_assignment(ty, *param, arg.span());
+            slots += param.width();
+        }
+        let descriptor = match args.len() {
+            0 => "()V",
+            1 => "(J)V",
+            _ => "(JI)V",
+        };
+        let method_ref = intern_method_ref(self.pool, "java/lang/Object", method, descriptor);
+        self.code.push_op_u16(op::INVOKEVIRTUAL, method_ref, 0);
+        self.code.drop_stack(slots);
+        Some(None)
+    }
+
     fn own_call(&mut self, method: &str, args: &[Expr], span: SourceSpan) -> Option<Option<JType>> {
+        // `wait()`/`notify()` with no receiver are `this.wait()`: `Object`'s,
+        // and final, so nothing a class declares can be what they mean.
+        if !self.in_static && is_monitor_call(method, args.len()) {
+            self.expr(&Expr::This { span });
+            return self.monitor_call(method, args);
+        }
         // Peek resolution to decide static vs instance dispatch.
         let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
         // The instance path carries this net; the implicit-`this` path did
