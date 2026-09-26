@@ -256,6 +256,11 @@ pub(crate) struct Interpreter<'run> {
     /// JDK answers. Kept beside the stream rather than in it, like
     /// `spent_streams`, so no construction site has to learn a new field.
     parallel_streams: HashSet<HeapRef>,
+    /// Streams whose SOURCE is known sorted in natural order — an
+    /// `IntStream.range`/`rangeClosed` — carried to every stage derived from
+    /// them, as the origin is. A collection's sortedness is read off the
+    /// origin instead (see `stream_known_sorted`).
+    sorted_sources: HashSet<HeapRef>,
     /// The handlers `onClose` registered, per stream. A JDK runs them when the
     /// pipeline is closed — which try-with-resources does for `Files.lines` —
     /// and they travel the pipeline, so an op on a stream that has one carries
@@ -377,6 +382,7 @@ impl<'run> Interpreter<'run> {
             cursor_pending: HashMap::new(),
             spent_streams: HashSet::new(),
             parallel_streams: HashSet::new(),
+            sorted_sources: HashSet::new(),
             stream_close_handlers: HashMap::new(),
             stream_origins: HashMap::new(),
         }
@@ -1347,6 +1353,7 @@ impl<'run> Interpreter<'run> {
         self.cursor_pending.retain(|reference, _| alive(reference));
         self.spent_streams.retain(alive);
         self.parallel_streams.retain(alive);
+        self.sorted_sources.retain(alive);
         self.stream_close_handlers
             .retain(|stream, handlers| alive(stream) && handlers.iter().all(&alive));
         self.stream_origins
@@ -11647,6 +11654,80 @@ impl<'run> Interpreter<'run> {
 
     /// Append an intermediate op, returning the new stream. The source is
     /// SHARED by clone (finite, small), so the chain stays a value pipeline.
+    /// Whether a stream is known SORTED in natural order — a JDK's `SORTED`
+    /// stream flag. Set by a natural-order source (a range, a `TreeSet` or a
+    /// `TreeMap`'s keys with no comparator) or a `sorted()`; kept by the ops
+    /// that neither reorder nor change the elements (`filter`, `peek`,
+    /// `limit`, `skip`, `distinct`, `takeWhile`, `dropWhile`); cleared by any
+    /// that maps, and by a sort with a COMPARATOR (which a JDK marks
+    /// not-sorted in the natural sense).
+    fn stream_known_sorted(&self, stream: HeapRef) -> bool {
+        use crate::value::{HeapObject as H, MapViewKind, StreamOp as Op};
+        let Some(H::Stream { ops, .. }) = self.heap.get(stream) else {
+            return false;
+        };
+        for op in ops.iter().rev() {
+            match op {
+                Op::Sorted(None) => return true,
+                // ...and the retypings: a JDK's `boxed()`, `asLongStream()` and
+                // `asDoubleStream()` keep the flag (measured), since a widened
+                // or boxed sorted run is still sorted.
+                Op::Filter(_)
+                | Op::Peek(_)
+                | Op::Limit(_)
+                | Op::Skip(_)
+                | Op::Distinct
+                | Op::TakeWhile(_)
+                | Op::DropWhile(_)
+                | Op::Box
+                | Op::WidenToLong
+                | Op::WidenToDouble => {}
+                _ => return false,
+            }
+        }
+        if self.sorted_sources.contains(&stream) {
+            return true;
+        }
+        let Some(origin) = self.stream_origins.get(&stream) else {
+            return false;
+        };
+        // A tree in natural order, walked ASCENDING — the tree itself, its
+        // keys, or a range of either (an unmodifiable wrapper is the same
+        // walk). A descending view, a map's values and an `EnumSet` (whose
+        // spliterator does not say SORTED) are not.
+        let natural_tree = |tree: HeapRef| {
+            matches!(
+                self.heap.get(tree),
+                Some(H::TreeSet { comparator: None, .. } | H::TreeMap { comparator: None, .. })
+            ) && self.heap.view_class_of(tree) != Some("java/util/RegularEnumSet")
+        };
+        let source = self.heap.unwrapped(origin.source);
+        match self.heap.get(source) {
+            Some(H::TreeSet { .. }) => natural_tree(source),
+            Some(H::MapView {
+                map,
+                kind: MapViewKind::Keys,
+                ..
+            }) => match self.heap.get(*map) {
+                Some(H::TreeMap { .. }) => natural_tree(*map),
+                // `headMap(k).keySet()` — the keys of an ascending range.
+                Some(H::SortedView {
+                    backing,
+                    descending: false,
+                    ..
+                }) => natural_tree(*backing),
+                _ => false,
+            },
+            Some(H::SortedView {
+                backing,
+                descending: false,
+                face: crate::value::SortedFace::Set | crate::value::SortedFace::Keys,
+                ..
+            }) => natural_tree(*backing),
+            _ => false,
+        }
+    }
+
     fn stream_with_op(&mut self, stream: HeapRef, op: crate::value::StreamOp) -> JValue {
         let (source, mut ops) = self.stream_pipeline(stream);
         ops.push(op);
@@ -11681,6 +11762,11 @@ impl<'run> Interpreter<'run> {
             && self.parallel_streams.contains(&from)
         {
             self.parallel_streams.insert(derived);
+        }
+        if let JValue::Ref(Some(derived)) = to
+            && self.sorted_sources.contains(&from)
+        {
+            self.sorted_sources.insert(derived);
         }
         // …and so does a close handler: closing the stream a pipeline ends in
         // runs what was registered anywhere along it.
@@ -13456,6 +13542,18 @@ impl<'run> Interpreter<'run> {
             // would make a `peek` above it print before any terminal asked for
             // an element, and would run at all in a pipeline the JDK never
             // traverses.
+            // ...unless the stream is ALREADY known sorted in natural order,
+            // where a JDK's `sorted()` is a pass-through, not a barrier
+            // (`SortedOps`: `if SORTED.isKnown(flags) return sink`) — so a
+            // `peek` on each side of it interleaves.
+            ("sorted", []) if self.stream_known_sorted(receiver) => {
+                let (source, ops) = self.stream_pipeline(receiver);
+                let derived = JValue::Ref(Some(
+                    self.heap
+                        .alloc(crate::value::HeapObject::Stream { source, ops }),
+                ));
+                return Ok(Answered::Value(self.inherit_stream_origin(receiver, derived)));
+            }
             ("sorted", []) => {
                 return Ok(Answered::Value(
                     self.stream_with_op(receiver, StreamOp::Sorted(None)),
@@ -15508,6 +15606,8 @@ impl<'run> Interpreter<'run> {
                 source: crate::value::StreamSource::Fixed(ints),
                 ops: Vec::new(),
             });
+            // A range is SORTED (and says so to a later `sorted()`).
+            self.sorted_sources.insert(stream);
             frame.stack.push(JValue::Ref(Some(stream)));
             return Ok(None);
         }
@@ -17270,6 +17370,30 @@ impl<'run> Interpreter<'run> {
                     return Ok(None);
                 }
                 _ => {}
+            }
+        }
+        // `clear()` COUNTS as a modification even when there was nothing to
+        // clear: a JDK's `ArrayList`, `LinkedList`, `HashMap`, `TreeMap`,
+        // `PriorityQueue` (and the sets and views over them) increment
+        // `modCount` unconditionally, so a sub-list or cursor taken before an
+        // empty `clear()` is stale after it. A non-empty one is counted by its
+        // change of length; only the empty one needs saying.
+        if method_name == "clear" && args.is_empty() {
+            self.count_empty_clear(receiver);
+        }
+        // ...and so does an `ArrayList`'s (or a `Vector`'s) `addAll` of NOTHING:
+        // JDK 11 increments `modCount` before it checks whether there is
+        // anything to add. A `LinkedList`'s returns first.
+        if method_name == "addAll"
+            && let Some(JValue::Ref(Some(added))) = args.last()
+            && iterated_len_of(&self.heap, *added) == 0
+        {
+            let target = self.unwrap_synchronized(receiver);
+            if matches!(
+                self.heap.get(target),
+                Some(crate::value::HeapObject::ArrayList(_) | crate::value::HeapObject::Stack(_))
+            ) {
+                self.heap.bump_mod_count(target);
             }
         }
         // A loop over anything else is bounded as it always was: `index !=
@@ -19212,6 +19336,50 @@ impl<'run> Interpreter<'run> {
     /// interface defaults that `set` through a list iterator. Measured: a
     /// sort inside a for-each throws on the first two and walks on over the
     /// third. The length never moves, so the count is bumped here.
+    /// An EMPTY `clear()` on a collection whose `clear` increments
+    /// `modCount` regardless — see the caller. Only a writable collection or a
+    /// writable map view over one: a read-only one throws instead, and an
+    /// `ArrayDeque` (no `modCount`), a `ConcurrentHashMap` (weakly
+    /// consistent) and a sub-range (which removes element by element) count
+    /// nothing.
+    fn count_empty_clear(&mut self, receiver: HeapRef) {
+        use crate::value::HeapObject as H;
+        let target = self.unwrap_synchronized(receiver);
+        let owner = match self.heap.get(target) {
+            Some(H::MapView {
+                map,
+                read_only: false,
+                ..
+            }) => *map,
+            Some(
+                H::ArrayList(_)
+                | H::Stack(_)
+                | H::LinkedList(_)
+                | H::HashMap(_)
+                | H::HashSet(_)
+                | H::TreeMap { .. }
+                | H::TreeSet { .. }
+                | H::PriorityQueue { .. },
+            ) => target,
+            _ => return,
+        };
+        let counts = match self.heap.get(owner) {
+            Some(H::HashMap(table) | H::HashSet(table)) => !table.is_concurrent(),
+            Some(
+                H::ArrayList(_)
+                | H::Stack(_)
+                | H::LinkedList(_)
+                | H::TreeMap { .. }
+                | H::TreeSet { .. }
+                | H::PriorityQueue { .. },
+            ) => true,
+            _ => false,
+        };
+        if counts && iterated_len_of(&self.heap, owner) == 0 {
+            self.heap.bump_mod_count(owner);
+        }
+    }
+
     fn count_in_place_rewrite(&mut self, list: HeapRef) {
         if matches!(
             self.heap.get(list),

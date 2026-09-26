@@ -63245,6 +63245,177 @@ stricter_than_javac!(
     "import java.util.concurrent.*;\npublic class StrictBulk { public static void main(String[] a) { new ConcurrentHashMap<String, Integer>().forEachKey(1, k -> {}); } }"
 );
 
+// The Scanner reads that SEARCH the input with a pattern rather than read it as
+// delimited tokens, each refused until now: `findInLine` (only to the next
+// line separator, consuming what comes before the match — the textbook
+// `findInLine(".").charAt(0)` reads one character), `skip` (must match AT the
+// cursor, else NoSuchElementException), `findWithinHorizon` (a hard region
+// end; 0 is none; negative is "horizon < 0"), `tokens()` and `findAll`. What
+// each matched is what `match()` answers, in positions of the whole input.
+differential_test!(
+    a_scanner_searches_with_a_pattern,
+    "S1",
+    r#"
+import java.util.*;
+import java.util.regex.*;
+import java.util.stream.*;
+public class S1 {
+    interface B { Object get() throws Throwable; }
+    static void s(String l, B b) { try { System.out.println(l + " = [" + b.get() + "]"); } catch (Throwable e) { System.out.println(l + " ! " + e.getClass().getName() + ": " + e.getMessage()); } }
+    public static void main(String[] args) {
+        Scanner a = new Scanner("abc 12 def\nxyz 7\n");
+        s("findInLine .", () -> a.findInLine("."));
+        s("findInLine .", () -> a.findInLine("."));
+        s("rest line", () -> a.nextLine());
+        s("findInLine digit none on line", () -> a.findInLine("\\d{3}"));
+        s("next after none", () -> a.next());
+        s("findInLine \\d", () -> a.findInLine("\\d"));
+        s("match", () -> a.match().group() + " " + a.match().start() + " " + a.match().end());
+        s("hasNext", () -> a.hasNext());
+        s("findInLine end", () -> a.findInLine("x"));
+        Scanner b = new Scanner("  hello world");
+        s("skip spaces", () -> { b.skip("\\s*"); return b.next(); });
+        s("skip fail", () -> b.skip("zz"));
+        s("skip Pattern", () -> b.skip(Pattern.compile("\\s+w")).next());
+        Scanner c = new Scanner("one two\nthree four\nfive");
+        s("horizon 5", () -> c.findWithinHorizon("t\\w+", 5));
+        s("horizon 0", () -> c.findWithinHorizon("t\\w+", 0));
+        s("after horizon", () -> c.next());
+        s("horizon neg", () -> c.findWithinHorizon("x", -1));
+        s("tokens", () -> new Scanner("a b  c\nd").tokens().collect(Collectors.toList()));
+        s("findAll", () -> new Scanner("a1b22c333").findAll("\\d+").map(MatchResult::group).collect(Collectors.toList()));
+        Scanner d = new Scanner("x");
+        d.close();
+        s("closed findInLine", () -> d.findInLine("x"));
+        s("findInLine null", () -> new Scanner("x").findInLine((String) null));
+        s("char idiom", () -> new Scanner("Q rest").findInLine(".").charAt(0));
+        Scanner e = new Scanner("ab\ncd");
+        s("findInLine across", () -> e.findInLine("b\\nc"));
+        s("findInLine empty match", () -> e.findInLine("z*"));
+    }
+}
+"#
+);
+
+// ...and the same from standard input, where the scanner's buffer fills a line
+// at a time: `findInLine` reads only as far as the current line.
+differential_test_stdin!(
+    a_scanner_searches_standard_input,
+    "S2",
+    r#"
+import java.util.*;
+public class S2 {
+    public static void main(String[] args) {
+        Scanner in = new Scanner(System.in);
+        char grade = in.findInLine(".").charAt(0);
+        System.out.println("grade " + grade);
+        in.nextLine();
+        int n = in.nextInt();
+        String word = in.findInLine("[a-z]+");
+        System.out.println(n + " " + word + " [" + in.nextLine() + "]");
+        System.out.println(in.findWithinHorizon("x\\d", 0) + " " + in.next());
+        in.skip("\\s*");
+        System.out.println(in.findInLine("\\w") + " " + in.hasNextLine());
+    }
+}
+"#,
+    "B+ student\n42 alpha beta\nfoo\nbar x7 end\n  z tail\n"
+);
+
+// A stream carries a JDK's SORTED flag. A natural-order source — a range, a
+// `TreeSet` or a `TreeMap`'s keys, ascending, or a range of one — and a
+// `sorted()` set it; `filter`/`peek`/`limit`/`skip`/`distinct`/`takeWhile`/
+// `dropWhile` and the retypings (`boxed`, `asLongStream`) keep it; `map` and a
+// sort with a comparator clear it. On a stream that has it, `sorted()` is a
+// PASS-THROUGH rather than a barrier (JDK `SortedOps`), so a `peek` on each
+// side of it interleaves. A 90-pipeline fuzz found the range case.
+differential_test!(
+    a_sorted_stream_is_not_sorted_again,
+    "SF",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class SF {
+    static StringBuilder sb = new StringBuilder();
+    static void run(String label, Runnable r) { sb.setLength(0); r.run(); System.out.println(label + ": " + sb); }
+    public static void main(String[] args) {
+        TreeSet<Integer> natural = new TreeSet<>(List.of(3, 1, 2));
+        TreeSet<Integer> reversed = new TreeSet<>(Comparator.reverseOrder()); reversed.addAll(List.of(3, 1, 2));
+        run("treeset natural", () -> natural.stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("treeset comparator", () -> reversed.stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("sorted twice", () -> Stream.of(3, 1, 2).sorted().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("map clears", () -> IntStream.range(1, 4).map(v -> v * 2).peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("descending", () -> natural.descendingSet().stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("long range", () -> LongStream.rangeClosed(1, 3).peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("treemap keys", () -> new TreeMap<>(Map.of("b", 1, "a", 2)).keySet().stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("filter keeps", () -> IntStream.range(0, 4).filter(v -> v % 2 == 0).peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("natural comparator", () -> Stream.of(1, 2, 3).sorted().peek(v -> sb.append('a').append(v)).sorted(Comparator.naturalOrder()).forEach(v -> sb.append('b').append(v)));
+        run("boxed", () -> IntStream.range(1, 3).boxed().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("count", () -> sb.append(IntStream.range(1, 4).peek(v -> sb.append('a').append(v)).sorted().count()));
+        run("limit short", () -> IntStream.range(1, 100).peek(v -> sb.append('a').append(v)).sorted().limit(2).forEach(v -> sb.append('b').append(v)));
+        run("headset", () -> natural.headSet(3).stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+    }
+}
+"#
+);
+
+differential_test!(
+    which_sources_are_already_sorted,
+    "SG",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class SG {
+    static StringBuilder sb = new StringBuilder();
+    static void run(String label, Runnable r) { sb.setLength(0); r.run(); System.out.println(label + ": " + sb); }
+    public static void main(String[] args) {
+        TreeSet<Integer> t = new TreeSet<>(List.of(1, 2, 3, 4));
+        TreeMap<Integer, String> m = new TreeMap<>(Map.of(1, "a", 2, "b", 3, "c"));
+        run("asLong", () -> IntStream.range(1, 3).asLongStream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("asDouble", () -> IntStream.range(1, 3).asDoubleStream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("tailSet", () -> t.tailSet(2).stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("subSet", () -> t.subSet(1, 3).stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("headMap keys", () -> m.headMap(3).keySet().stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("navigableKeySet", () -> m.navigableKeySet().stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("descendingKeySet", () -> m.descendingKeySet().stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("values", () -> m.values().stream().peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+        run("enumset", () -> EnumSet.allOf(java.time.DayOfWeek.class).stream().limit(2).peek(v -> sb.append('a').append(v.getValue())).sorted().forEach(v -> sb.append('b').append(v.getValue())));
+        run("unmod treeset", () -> Collections.unmodifiableSortedSet(t).stream().limit(2).peek(v -> sb.append('a').append(v)).sorted().forEach(v -> sb.append('b').append(v)));
+    }
+}
+"#
+);
+
+// `clear()` INCREMENTS `modCount` even when there is nothing to clear
+// (`ArrayList`, `LinkedList`, `HashMap`, `TreeMap`, … — not `ArrayDeque`), and
+// so does an `ArrayList`'s `addAll` of an empty collection (not a
+// `LinkedList`'s): a sub-list taken before either is stale after it. caturra
+// counted only changes of LENGTH. Found by the view fuzz at scale.
+differential_test!(
+    an_empty_change_is_still_a_change,
+    "EC",
+    r#"
+import java.util.*;
+public class EC {
+    interface B { Object get(); }
+    static void s(String l, B b) { try { System.out.println(l + " = " + b.get()); } catch (RuntimeException e) { System.out.println(l + " ! " + e.getClass().getSimpleName()); } }
+    public static void main(String[] args) {
+        List<String> al = new ArrayList<>(); List<String> sub = al.subList(0, 0); al.clear(); s("ArrayList sub", () -> sub.size());
+        List<String> ll = new LinkedList<>(); List<String> lsub = ll.subList(0, 0); ll.clear(); s("LinkedList sub", () -> lsub.isEmpty());
+        Map<String,Integer> hm = new HashMap<>(); Iterator<String> hit = hm.keySet().iterator(); hm.clear(); s("HashMap cursor", () -> hit.hasNext());
+        Set<String> hs = new HashSet<>(List.of("a")); Iterator<String> sit = hs.iterator(); sit.next(); sit.remove(); hs.clear(); s("HashSet cursor after", () -> { sit.hasNext(); return "ok"; });
+        TreeMap<String,Integer> tm = new TreeMap<>(); SortedMap<String,Integer> head = tm.headMap("m"); tm.clear(); s("TreeMap head", () -> head.size());
+        Deque<String> dq = new ArrayDeque<>(); Iterator<String> dit = dq.iterator(); dq.clear(); s("ArrayDeque cursor", () -> dit.hasNext());
+        List<String> base = new ArrayList<>(List.of("x")); ListIterator<String> li = base.listIterator(); base.remove(0); base.clear();
+        s("ArrayList cursor", () -> { li.hasNext(); return li.nextIndex(); });
+        List<String> keys = new ArrayList<>(); List<String> ks = keys.subList(0, 0); new HashMap<String,Integer>().keySet().clear(); keys.addAll(List.of()); s("addAll empty", () -> ks.size());
+        List<String> ll2 = new LinkedList<>(); List<String> ls2 = ll2.subList(0, 0); ll2.addAll(List.of()); s("LinkedList addAll empty", () -> ls2.size());
+        Map<String,Integer> hm2 = new HashMap<>(); Set<String> view = hm2.keySet(); List<String> backing = new ArrayList<>(); List<String> bs = backing.subList(0,0); view.clear(); backing.clear(); s("view clear then list", () -> bs.size());
+    }
+}
+"#
+);
+
 // `join()` declares `InterruptedException`, so an unhandled one is javac's own
 // first error — and a `catch` around it is legal rather than "never thrown in
 // body of corresponding try statement". (When `join` was refused, phase 0,

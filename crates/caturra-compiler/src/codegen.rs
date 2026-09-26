@@ -13573,31 +13573,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "caturra does not model java.nio.file.DirectoryStream — use Files.list(dir)",
     ),
     (
-        "Scanner",
-        "findInLine",
-        "caturra's Scanner reads whole tokens and cannot search within a line",
-    ),
-    (
-        "Scanner",
-        "findWithinHorizon",
-        "caturra's Scanner reads whole tokens and cannot search within a horizon",
-    ),
-    (
-        "Scanner",
-        "skip",
-        "caturra's Scanner reads whole tokens and cannot skip by pattern",
-    ),
-    (
-        "Scanner",
-        "tokens",
-        "caturra's Scanner does not expose its tokens as a stream",
-    ),
-    (
-        "Scanner",
-        "findAll",
-        "caturra's Scanner does not expose matches as a stream",
-    ),
-    (
         "HashMap",
         "of",
         "the immutable factories live on Map, not HashMap - write Map.of(...)",
@@ -14229,6 +14204,47 @@ fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
 }
 
 const SCANNER_METHODS: &[BuiltinMethod] = &[
+    // The pattern READS, which search the input as characters rather than
+    // read it as delimited tokens (see `scanner_pattern_read` in the VM).
+    bm("findInLine", &[BParam::Str], BRet::Str, "(Ljava/lang/String;)Ljava/lang/String;"),
+    bm(
+        "findInLine",
+        &[BParam::Pattern],
+        BRet::Str,
+        "(Ljava/util/regex/Pattern;)Ljava/lang/String;",
+    ),
+    bm(
+        "findWithinHorizon",
+        &[BParam::Str, BParam::Int],
+        BRet::Str,
+        "(Ljava/lang/String;I)Ljava/lang/String;",
+    ),
+    bm(
+        "findWithinHorizon",
+        &[BParam::Pattern, BParam::Int],
+        BRet::Str,
+        "(Ljava/util/regex/Pattern;I)Ljava/lang/String;",
+    ),
+    bm("skip", &[BParam::Str], BRet::Scanner, "(Ljava/lang/String;)Ljava/util/Scanner;"),
+    bm(
+        "skip",
+        &[BParam::Pattern],
+        BRet::Scanner,
+        "(Ljava/util/regex/Pattern;)Ljava/util/Scanner;",
+    ),
+    bm("tokens", &[], BRet::StreamString, "()Ljava/util/stream/Stream;"),
+    bm(
+        "findAll",
+        &[BParam::Str],
+        BRet::MatchResultStream,
+        "(Ljava/lang/String;)Ljava/util/stream/Stream;",
+    ),
+    bm(
+        "findAll",
+        &[BParam::Pattern],
+        BRet::MatchResultStream,
+        "(Ljava/util/regex/Pattern;)Ljava/util/stream/Stream;",
+    ),
     // `useDelimiter(pattern)` answers the scanner itself, so it chains onto
     // the constructor: `new Scanner(text).useDelimiter(",")`.
     bm(

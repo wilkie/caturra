@@ -7945,6 +7945,11 @@ fn scanner_method(
     if closed && method != "close" {
         return Err(throw("java.lang.IllegalStateException: Scanner closed"));
     }
+    // The pattern READS: searching the input as characters rather than
+    // reading it as delimited tokens.
+    if let Some(answer) = scanner_pattern_read(heap, console, receiver, method, args)? {
+        return Ok(answer);
+    }
     match method {
         "nextLine" => {
             let line = scanner_next_line(heap, console, receiver)?
@@ -9017,6 +9022,160 @@ fn scanner_radix_arg(heap: &Heap, receiver: HeapRef, args: &[JValue]) -> Result<
 
 /// Whether a token matches a pattern IN FULL — `String.matches` semantics,
 /// which is what the JDK's `hasNext(String)` asks of the token it peeked.
+/// The unread input as UTF-16 units, and a way back from a unit offset in it
+/// to the scanner's byte cursor.
+fn scanner_rest_units(buffer: &str, pos: usize) -> (Vec<u16>, Vec<usize>) {
+    let rest = &buffer[pos..];
+    let mut units = Vec::with_capacity(rest.len());
+    // `byte_at[i]` is the byte offset (in `rest`) of unit `i`; one past the
+    // end maps to the end.
+    let mut byte_at = Vec::with_capacity(rest.len() + 1);
+    for (offset, ch) in rest.char_indices() {
+        let mut pair = [0u16; 2];
+        for unit in ch.encode_utf16(&mut pair) {
+            units.push(*unit);
+            byte_at.push(offset);
+        }
+    }
+    byte_at.push(rest.len());
+    (units, byte_at)
+}
+
+/// `findInLine`, `skip`, `findWithinHorizon`, `tokens` and `findAll` — the
+/// Scanner reads that search the input with a pattern, ignoring the delimiter.
+/// `None` for any other method.
+///
+/// Measured on JDK 11: `findInLine` searches only up to the next line
+/// separator (a pattern cannot cross it) and, when it finds a match, consumes
+/// the input BEFORE the match as well; `skip` must match AT the cursor or it is
+/// a `NoSuchElementException`; a horizon is a hard end to the region (0 means
+/// none), and a negative one is "horizon < 0". What any of them matched is what
+/// `match()` answers, in positions of the whole input.
+#[allow(clippy::option_option)]
+fn scanner_pattern_read(
+    heap: &mut Heap,
+    console: &mut dyn ConsoleIo,
+    receiver: HeapRef,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<Option<JValue>>, VmError> {
+    match method {
+        "findInLine" | "skip" | "findWithinHorizon" | "findAll" => {}
+        "tokens" => {
+            // Every remaining token, read now: a stream over them.
+            let mut tokens = Vec::new();
+            while let Some(token) = scanner_next_token(heap, console, receiver)? {
+                tokens.push(JValue::Ref(Some(heap.alloc_string(&token))));
+            }
+            let stream = heap.alloc(HeapObject::Stream {
+                source: crate::value::StreamSource::Fixed(tokens),
+                ops: Vec::new(),
+            });
+            return Ok(Some(Some(JValue::Ref(Some(stream)))));
+        }
+        _ => return Ok(None),
+    }
+    let pattern = scanner_pattern_arg(heap, args)?;
+    let regex = compile_scanner_delimiter(&pattern)?;
+    if method == "findWithinHorizon"
+        && let Some(JValue::Int(horizon)) = args.get(1)
+        && *horizon < 0
+    {
+        return Err(throw("java.lang.IllegalArgumentException: horizon < 0"));
+    }
+    // The whole input is needed to search past a line (`skip`, a horizon,
+    // `findAll`); `findInLine` only to the end of the current line.
+    loop {
+        let (buffer, pos, eof) = scanner_state(heap, receiver);
+        let whole_line = buffer[pos..].contains(['\n', '\r', '\u{2028}', '\u{2029}', '\u{85}']);
+        if eof || (method == "findInLine" && whole_line) {
+            break;
+        }
+        scanner_fill(heap, console, receiver);
+    }
+    let (buffer, pos, _) = scanner_state(heap, receiver);
+    let (units, byte_at) = scanner_rest_units(&buffer, pos);
+    if method == "findAll" {
+        // Every match of the rest of the input, consuming it.
+        let whole: Vec<u16> = buffer.encode_utf16().collect();
+        let base = buffer[..pos].encode_utf16().count();
+        let mut results = Vec::new();
+        let mut from = 0;
+        let mut last_end = 0;
+        while from <= units.len() {
+            let attempt = regex.find_in(&units, from, crate::regex::Bounds::whole(&units));
+            let Some(found) = attempt.matched else {
+                break;
+            };
+            let groups = found
+                .groups
+                .iter()
+                .map(|group| group.map(|(start, end)| (start + base, end + base)))
+                .collect();
+            results.push(JValue::Ref(Some(heap.alloc(HeapObject::MatchResult {
+                input: whole.clone(),
+                groups,
+            }))));
+            last_end = found.end;
+            from = if found.end == found.start { found.end + 1 } else { found.end };
+        }
+        // The scanner is left past the last match, as a JDK's is.
+        scanner_set_pos(heap, receiver, pos + byte_at[last_end]);
+        let stream = heap.alloc(HeapObject::Stream {
+            source: crate::value::StreamSource::Fixed(results),
+            ops: Vec::new(),
+        });
+        return Ok(Some(Some(JValue::Ref(Some(stream)))));
+    }
+    let bounds = |end: usize| crate::regex::Bounds {
+        start: 0,
+        end,
+        anchoring: false,
+        transparent: true,
+        since: None,
+    };
+    let found = match method {
+        "findInLine" => {
+            let line_end = units
+                .iter()
+                .position(|unit| matches!(*unit, 0x0A | 0x0D | 0x2028 | 0x2029 | 0x85))
+                .unwrap_or(units.len());
+            regex.find_in(&units, 0, bounds(line_end)).matched
+        }
+        "skip" => {
+            let found = regex.looking_at(&units, bounds(units.len())).matched;
+            if found.is_none() {
+                return Err(throw("java.util.NoSuchElementException"));
+            }
+            found
+        }
+        _ => {
+            let horizon = match args.get(1) {
+                Some(JValue::Int(horizon)) => usize::try_from(*horizon).unwrap_or(0),
+                _ => 0,
+            };
+            let end = if horizon == 0 {
+                units.len()
+            } else {
+                horizon.min(units.len())
+            };
+            regex.find_in(&units, 0, bounds(end)).matched
+        }
+    };
+    let Some(found) = found else {
+        return Ok(Some(Some(JValue::NULL)));
+    };
+    let start = pos + byte_at[found.start];
+    let end = pos + byte_at[found.end];
+    let text = buffer[start..end].to_owned();
+    scanner_record_match(heap, receiver, &text, start);
+    scanner_set_pos(heap, receiver, end);
+    if method == "skip" {
+        return Ok(Some(Some(JValue::Ref(Some(receiver)))));
+    }
+    Ok(Some(Some(JValue::Ref(Some(heap.alloc_string(&text))))))
+}
+
 fn scanner_token_matches(token: &str, pattern: &str) -> Result<bool, VmError> {
     let token: Vec<u16> = token.encode_utf16().collect();
     let pattern: Vec<u16> = pattern.encode_utf16().collect();
@@ -9664,7 +9823,7 @@ pub(crate) fn check_comodification(
 /// one that OWNS the storage. A wrapper is peeled, a map's key set or values
 /// is its map, and a sub-list or a sorted range is the collection it is a
 /// range of — a JDK's view cursor checks the ROOT's `modCount`.
-fn stamp_root(heap: &Heap, source: HeapRef) -> HeapRef {
+pub(crate) fn stamp_root(heap: &Heap, source: HeapRef) -> HeapRef {
     let source = heap.unwrapped(source);
     if let Some(map) = view_map(heap, source) {
         return stamp_root(heap, map);

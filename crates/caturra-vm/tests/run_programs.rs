@@ -8502,9 +8502,11 @@ fn try_catch_compile_errors_match_javac() {
         // true when it was written and false from the moment the bignum core
         // landed — a refusal that outlives its reason is a worse answer than
         // no method at all.
+        // ...nor is `s.findInLine("x")`, which searches the input now; the
+        // Scanner's refusal left to pin is its locale.
         (
-            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.findInLine(\"x\"); } }",
-            "caturra's Scanner reads whole tokens and cannot search within a line",
+            "import java.util.Scanner; class M { static void f() { Scanner s = new Scanner(System.in); s.locale(); } }",
+            "caturra formats in the US locale and models no java.util.Locale value",
         ),
     ];
     for (source, expected) in cases {

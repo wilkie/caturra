@@ -15879,6 +15879,41 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### A longer fuzz run, and a Scanner that searches (2026-09-26)
+
+The fuzzers run at scale — three seeds, 150 random programs and 30 each of
+collection, pipeline and view programs per seed — found two divergences, both
+in rules a JDK's source states and caturra had generalized past:
+
+- **A stream carries a SORTED flag.** `IntStream.rangeClosed(1, 4).peek(a)
+  .sorted().peek(b)` interleaves `a` and `b` on a JDK: a range is known sorted,
+  and `sorted()` on a known-sorted stream is a pass-through, not a barrier
+  (`SortedOps`: `if (SORTED.isKnown(flags)) return sink`). Measured which
+  sources set the flag (a range; a `TreeSet`, a `TreeMap`'s keys, and an
+  ascending range of either, in NATURAL order; a `sorted()`), which ops keep it
+  (`filter`, `peek`, `limit`, `skip`, `distinct`, `takeWhile`, `dropWhile`,
+  and the retypings `boxed`/`asLongStream`/`asDoubleStream`) and which clear it
+  (`map`, `flatMap`, and a sort with a comparator — even `naturalOrder()`).
+  A descending view, a map's `values()` and an `EnumSet` are not sorted
+  sources.
+- **An empty change is still a change.** `clear()` increments `modCount`
+  unconditionally on every JDK collection that has one (not `ArrayDeque`), and
+  an `ArrayList`'s `addAll` of an empty collection does too (a `LinkedList`'s
+  returns first) — so a sub-list taken before `back.clear()` on an EMPTY list
+  is stale after it. caturra counted only changes of LENGTH.
+
+And, chosen from the coverage measurement, the last of `Scanner`'s refused
+reads: `findInLine`, `skip`, `findWithinHorizon`, `tokens` and `findAll`, on
+caturra's own regex engine. Measured first: `findInLine` searches only to the
+next line separator and consumes what precedes the match (the textbook
+`findInLine(".").charAt(0)` reads one character); `skip` must match AT the
+cursor; a horizon is a hard end of the region, 0 is none and a negative one is
+"horizon < 0"; `match()` answers in positions of the whole input.
+
+Pinned as `a_sorted_stream_is_not_sorted_again`,
+`which_sources_are_already_sorted`, `an_empty_change_is_still_a_change`,
+`a_scanner_searches_with_a_pattern` and `a_scanner_searches_standard_input`.
+
 ### ConcurrentHashMap (2026-09-26)
 
 Refused by name until now, because caturra's collections are native and a
