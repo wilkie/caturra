@@ -783,6 +783,80 @@ public class Main {
 `,
   },
   {
+    name: 'SwingWorker progress',
+    group: 'Getting started',
+    starter: `import javax.swing.*;
+import java.awt.*;
+import java.util.List;
+
+public class Main {
+  public static void main(String[] args) {
+    SwingUtilities.invokeLater(Main::buildUi);
+  }
+
+  static void buildUi() {
+    JFrame frame = new JFrame("SwingWorker");
+    frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+    frame.setLayout(new GridLayout(3, 1));
+    JButton start = new JButton("Count primes");
+    JProgressBar bar = new JProgressBar(0, 100);
+    JLabel status = new JLabel("Ready");
+
+    start.addActionListener(e -> {
+      start.setEnabled(false);
+      // The counting runs on a worker thread; process, done and the progress
+      // listener run on the event-dispatch thread, so they may touch the UI.
+      SwingWorker<Integer, Integer> worker = new SwingWorker<>() {
+        protected Integer doInBackground() throws Exception {
+          int count = 0;
+          for (int n = 2; n <= 2000; n++) {
+            if (isPrime(n)) {
+              count++;
+              if (count % 50 == 0) publish(n);
+            }
+            if (n % 100 == 0) {
+              setProgress(n * 100 / 2000);
+              Thread.sleep(20);
+            }
+          }
+          return count;
+        }
+
+        protected void process(List<Integer> found) {
+          status.setText("Found primes up to " + found.get(found.size() - 1));
+        }
+
+        protected void done() {
+          try {
+            status.setText("Done: " + get() + " primes");
+          } catch (Exception ex) {
+            status.setText("Failed: " + ex);
+          }
+          start.setEnabled(true);
+        }
+      };
+      worker.addPropertyChangeListener(evt -> {
+        if ("progress".equals(evt.getPropertyName())) bar.setValue((Integer) evt.getNewValue());
+      });
+      worker.execute();
+    });
+
+    frame.add(start);
+    frame.add(bar);
+    frame.add(status);
+    frame.setVisible(true);
+  }
+
+  static boolean isPrime(int n) {
+    for (int d = 2; d * d <= n; d++) {
+      if (n % d == 0) return false;
+    }
+    return true;
+  }
+}
+`,
+  },
+  {
     name: 'Menu options',
     group: 'Menus, actions & dialogs',
     starter: `import javax.swing.*;

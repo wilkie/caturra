@@ -15859,6 +15859,39 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### SwingWorker, java.beans, and an anonymous class inside a lambda (2026-09-26)
+
+`import javax.swing.SwingWorker;` was "cannot find symbol" — not even an
+honest refusal. It is bundled Java now, written the way a JDK writes it over
+`java.util.concurrent` (see specs/CONCURRENCY.md), and every observable the
+headless JDK shows agrees: the worker thread's name and daemon flag, `process`
+and `done` on the dispatch thread, the `PENDING -> STARTED -> DONE` state
+events, `get` wrapping a failure in an `ExecutionException`, `cancel`
+interrupting a sleeping worker, a timed `get` on one never started, and `run`
+on the calling thread. Two things came with it:
+
+- **`java.beans`** — `PropertyChangeListener`, `PropertyChangeEvent`,
+  `PropertyChangeSupport`, `PropertyChangeListenerProxy`; the package was in
+  the refused list. An unchanged value fires nothing, the general listeners
+  fire before the ones for a name, `hasListeners(name)` is true whenever a
+  general listener exists, and the event's `toString` is a JDK's.
+- **`java.lang.Void`** — refused as "not supported"; it is the type argument
+  of `SwingWorker<String, Void>` and `Callable<Void>`, and cannot be made
+  (`Void() has private access in Void`).
+
+Building the playground's SwingWorker demo found a general compiler bug: an
+**anonymous class created inside a lambda** was taken for the lambda's own
+synthesized class, because it is named after it (`Lambda$1$1`) and the test
+was a prefix. So its bare calls were sent to the enclosing scope as a lambda's
+are, and from a lambda in a static method `publish(n)` inside an anonymous
+`SwingWorker` was "non-static method publish() cannot be referenced from a
+static context". A synthesized class is the prefix and a NUMBER now.
+
+Pinned as `a_swing_worker`, `an_anonymous_class_inside_a_lambda`,
+`the_void_type` and `void_cannot_be_made`, with the browser test "a SwingWorker
+reports progress and its result on the event thread" (the "SwingWorker
+progress" demo).
+
 ### Swing's generic lists, and a wildcard over a type variable (2026-09-26)
 
 `JComboBox<String>` was "wrong number of type arguments; required 0": the

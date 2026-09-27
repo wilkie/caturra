@@ -140,6 +140,14 @@ fn jdk_binary_name(simple: &str) -> Option<&'static str> {
         "AtomicLong" => Some("java/util/concurrent/atomic/AtomicLong"),
         "AtomicBoolean" => Some("java/util/concurrent/atomic/AtomicBoolean"),
         "AtomicReference" => Some("java/util/concurrent/atomic/AtomicReference"),
+        // `SwingWorker` (swingworker.java) and java.beans (beans.java).
+        "Void" => Some("java/lang/Void"),
+        "SwingWorker" => Some("javax/swing/SwingWorker"),
+        "__SwingWorkerStateValue" => Some("javax/swing/SwingWorker$StateValue"),
+        "PropertyChangeListener" => Some("java/beans/PropertyChangeListener"),
+        "PropertyChangeEvent" => Some("java/beans/PropertyChangeEvent"),
+        "PropertyChangeSupport" => Some("java/beans/PropertyChangeSupport"),
+        "PropertyChangeListenerProxy" => Some("java/beans/PropertyChangeListenerProxy"),
         _ => None,
     }
 }
@@ -155,6 +163,12 @@ const THREAD_LIB: &str = include_str!("stdlib/thread.java");
 /// The bundled `java.util.concurrent`, `.atomic` and `.locks`
 /// (specs/CONCURRENCY.md, phase 2), injected when a source names the package.
 const CONCURRENT_LIB: &str = include_str!("stdlib/concurrent.java");
+/// `java.lang.Void` (void.java), for a type argument that holds nothing.
+const VOID_LIB: &str = include_str!("stdlib/void.java");
+/// `java.beans` — property-change listeners (beans.java).
+const BEANS_LIB: &str = include_str!("stdlib/beans.java");
+/// `javax.swing.SwingWorker`, over the concurrency and beans bundles.
+const SWING_WORKER_LIB: &str = include_str!("stdlib/swingworker.java");
 
 /// The erased `__BiConsumer` target type of a `Map.forEach` lambda,
 /// injected when a source calls `forEach`.
@@ -548,14 +562,25 @@ pub(crate) const LAMBDA_CLASS_PREFIX: &str = "Lambda$";
 /// not be effectively final.
 pub(crate) const METHOD_REF_CLASS_PREFIX: &str = "MethodRef$";
 
-/// Whether a class name is one of the synthesized function classes.
-/// A synthesized METHOD-REFERENCE class — the body of a `Type::method`.
-pub(crate) fn is_method_ref_class(name: &str) -> bool {
-    name.starts_with(METHOD_REF_CLASS_PREFIX)
+/// A synthesized class is the prefix and a NUMBER: `Lambda$3`. A class
+/// declared INSIDE one — an anonymous class a lambda body creates is
+/// `Lambda$3$1` — is an ordinary class with a `this` and its own members, and
+/// taking it for a lambda sent its bare calls to the enclosing scope:
+/// `new Base() { void work() { hit(); } }` inside a lambda in a static method
+/// was "non-static method hit() cannot be referenced from a static context".
+fn is_synthesized(name: &str, prefix: &str) -> bool {
+    name.strip_prefix(prefix)
+        .is_some_and(|rest| !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// A synthesized METHOD-REFERENCE class — the body of a `Type::method`.
+pub(crate) fn is_method_ref_class(name: &str) -> bool {
+    is_synthesized(name, METHOD_REF_CLASS_PREFIX)
+}
+
+/// Whether a class name is one of the synthesized function classes.
 pub(crate) fn is_lambda_class(name: &str) -> bool {
-    name.starts_with(LAMBDA_CLASS_PREFIX) || name.starts_with(METHOD_REF_CLASS_PREFIX)
+    is_synthesized(name, LAMBDA_CLASS_PREFIX) || is_synthesized(name, METHOD_REF_CLASS_PREFIX)
 }
 
 /// `java.lang.Number`'s two CONCRETE methods. Four of its six accessors are
@@ -844,9 +869,12 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // `java.util.concurrent` — every class of it needs an import (or its
     // qualified name), so the package's name in the text is the trigger. It is
     // written over `Thread`, which comes with it.
-    if sources
-        .iter()
-        .any(|s| s.text.contains("java.util.concurrent"))
+    // `SwingWorker` is written over the concurrency bundle.
+    let swing_worker = sources.iter().any(|s| s.text.contains("SwingWorker"));
+    if (swing_worker
+        || sources
+            .iter()
+            .any(|s| s.text.contains("java.util.concurrent")))
         && !units
             .iter()
             .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "ExecutorService"))
@@ -870,6 +898,33 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
             }
             units.push((String::from(path), unit));
         }
+        needs_function_lib = true;
+    }
+    // `java.beans` by its package, and `SwingWorker` (which reports through it)
+    // by its name.
+    let beans = swing_worker || reaches_package(&units, &chains, &["java", "beans"]);
+    // `Void`, named by the word; a program's own `Void` shadows it.
+    let void = sources.iter().any(|s| s.text.contains("Void"))
+        && !units
+            .iter()
+            .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "Void"));
+    for (wanted, path, library) in [
+        (void, "<void>", VOID_LIB),
+        (beans, "<beans>", BEANS_LIB),
+        (swing_worker, "<swingworker>", SWING_WORKER_LIB),
+    ] {
+        if !wanted || units.iter().any(|(existing, _)| existing == path) {
+            continue;
+        }
+        let (tokens, _) = lexer::lex(path, library);
+        let (mut unit, mut errs) = parser::parse(path, tokens);
+        compilation.diagnostics.append(&mut errs);
+        for class in &mut unit.classes {
+            if let Some(binary) = jdk_binary_name(&class.name) {
+                class.binary_name = Some(String::from(binary));
+            }
+        }
+        units.push((String::from(path), unit));
         needs_function_lib = true;
     }
     if (needs_function_lib

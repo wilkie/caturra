@@ -2440,6 +2440,24 @@ test.describe('swing (interactive)', () => {
     await expect(root.getByText('Done')).toBeVisible({ timeout: 10_000 });
   });
 
+  test('a SwingWorker reports progress and its result on the event thread', async ({ page }) => {
+    await page.goto('/');
+    await page.getByTestId('swing-level').selectOption({ label: 'SwingWorker progress' });
+    await page.getByTestId('run').click();
+    const root = page.getByTestId('swing-root');
+    const start = root.getByRole('button', { name: 'Count primes' });
+    await expect(root.getByText('Ready')).toBeVisible();
+    await start.click();
+
+    // While it works the button is disabled; `process` shows interim results,
+    // the progress listener fills the bar, and `done` shows the count.
+    await expect(start).toBeDisabled();
+    await expect(root).toContainText('Found primes up to');
+    await expect(root.getByText('Done: 303 primes')).toBeVisible({ timeout: 15_000 });
+    await expect(root.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100');
+    await expect(start).toBeEnabled();
+  });
+
   test('setLayout(null) positions children absolutely with setBounds', async ({ page }) => {
     await page.goto('/');
     await page.getByTestId('swing-level').selectOption({ label: 'Absolute layout' });

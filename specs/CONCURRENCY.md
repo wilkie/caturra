@@ -502,6 +502,17 @@ primitives except the one wait:
   and a text component compared an edit against `""` rather than the text it
   had, so shortening a field built with text reported an insert.
 
+- **`javax.swing.SwingWorker`** (a follow-up, 2026-09-26) is bundled Java too
+  (`stdlib/swingworker.java`), over the concurrency bundle as a JDK's is over
+  `java.util.concurrent`: a `FutureTask` over `doInBackground`, run by a pool
+  of up to ten daemon threads named `SwingWorker-pool-N-thread-M`; published
+  chunks reach `process` on the dispatch thread, coalesced, and so does
+  `done`; the "state" and "progress" properties go to their listeners on the
+  dispatch thread through `java.beans.PropertyChangeSupport` (now modelled:
+  `stdlib/beans.java`). `java.lang.Void` came with it, for
+  `SwingWorker<String, Void>`. Pinned by `a_swing_worker` and the browser test
+  "a SwingWorker reports progress and its result on the event thread".
+
 Pinned by `the_event_dispatch_thread`,
 `a_timer_alone_does_not_keep_a_program_alive`,
 `the_dispatch_thread_keeps_a_timer_going`, `an_exception_on_the_dispatch_thread`

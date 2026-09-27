@@ -595,7 +595,6 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
             "UnknownError",
             "UnsatisfiedLinkError",
             "UnsupportedClassVersionError",
-            "Void",
         ],
     ),
     // The rest of `java.lang.reflect`. caturra models the READ-ONLY surface a
@@ -909,7 +908,6 @@ const KNOWN_UNSUPPORTED_PACKAGES: &[&str] = &[
     "java.awt.image.renderable",
     "java.awt.peer",
     "java.awt.print",
-    "java.beans",
     "java.beans.beancontext",
     "java.lang.annotation",
     "java.lang.instrument",
@@ -1250,6 +1248,8 @@ const NESTED_LIBRARY_CLASSES: &[(&str, &str, &str)] = &[
     // level under a reserved name, since a nested class would be hoisted
     // under `State` — a name programs give their own classes.
     ("Thread", "State", "__ThreadState"),
+    // A worker's lifecycle state, kept the same way (stdlib/swingworker.java).
+    ("SwingWorker", "StateValue", "__SwingWorkerStateValue"),
 ];
 
 /// Resolve a fully qualified library name (`java.util.Scanner`) to the
@@ -1461,6 +1461,16 @@ static PACKAGES: &[(&str, &[&str])] = &[
     ("javax.accessibility", JAVAX_ACCESSIBILITY),
     ("java.awt", JAVA_AWT),
     ("java.awt.event", JAVA_AWT_EVENT),
+    ("java.beans", JAVA_BEANS),
+];
+
+/// java.beans: the property-change listener, its event and the support class
+/// (stdlib/beans.java) — what a model fires and `SwingWorker` reports through.
+static JAVA_BEANS: &[&str] = &[
+    "PropertyChangeListener",
+    "PropertyChangeEvent",
+    "PropertyChangeSupport",
+    "PropertyChangeListenerProxy",
 ];
 
 fn package_classes(package: &str) -> Option<&'static [&'static str]> {
@@ -1502,6 +1512,7 @@ static ORG_CODE_VALIDATION: &[&str] = &[
 /// validates and is what gates the injection.
 static JAVAX_SWING: &[&str] = &[
     "JFrame",
+    "SwingWorker",
     "JPanel",
     "JScrollPane",
     "JTabbedPane",

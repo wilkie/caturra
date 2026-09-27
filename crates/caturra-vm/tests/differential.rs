@@ -64144,3 +64144,196 @@ public class CopyUnrelated {
 }
 "#
 );
+
+// javax.swing.SwingWorker, over the bundled concurrency (specs/CONCURRENCY.md):
+// `doInBackground` on a daemon `SwingWorker-pool-N-thread-M` thread, `process`
+// and `done` on the dispatch thread, the "state" and "progress" properties
+// reported there, `get` wrapping a failure, `cancel` interrupting — and the
+// java.beans support it reports through. Printed so that no line depends on
+// which of two threads got there first.
+differential_test!(
+    a_swing_worker,
+    "WorkerProbe",
+    r#"
+import javax.swing.*;
+import java.beans.*;
+import java.util.*;
+import java.util.concurrent.*;
+
+public class WorkerProbe {
+    public static void main(String[] args) throws Exception {
+        CountDownLatch finished = new CountDownLatch(1);
+        List<String> seen = Collections.synchronizedList(new ArrayList<>());
+        List<Integer> progress = Collections.synchronizedList(new ArrayList<>());
+        List<String> states = Collections.synchronizedList(new ArrayList<>());
+        SwingWorker<Integer, String> worker = new SwingWorker<>() {
+            protected Integer doInBackground() throws Exception {
+                seen.add("background on EDT? " + SwingUtilities.isEventDispatchThread()
+                    + " daemon " + Thread.currentThread().isDaemon()
+                    + " name " + Thread.currentThread().getName());
+                publish("a");
+                publish("b", "c");
+                setProgress(50);
+                Thread.sleep(50);
+                setProgress(100);
+                return 42;
+            }
+            protected void process(List<String> chunks) {
+                seen.add("process on EDT " + SwingUtilities.isEventDispatchThread());
+                for (String c : chunks) seen.add("chunk " + c);
+            }
+            protected void done() {
+                try {
+                    seen.add("done on EDT " + SwingUtilities.isEventDispatchThread() + " -> " + get()
+                        + " " + isDone() + " " + isCancelled() + " " + getState());
+                } catch (Exception e) {
+                    seen.add("done failed " + e);
+                }
+                finished.countDown();
+            }
+        };
+        worker.addPropertyChangeListener(evt -> {
+            if ("progress".equals(evt.getPropertyName())) progress.add((Integer) evt.getNewValue());
+            if ("state".equals(evt.getPropertyName())) states.add(evt.getOldValue() + " -> " + evt.getNewValue());
+        });
+        System.out.println(worker.getState() + " " + worker.isDone() + " " + worker.getProgress());
+        worker.execute();
+        System.out.println("get " + worker.get() + " " + worker.isDone());
+        finished.await();
+        Thread.sleep(100);
+        List<String> chunks = new ArrayList<>();
+        for (String s : seen) if (s.startsWith("chunk")) chunks.add(s);
+        System.out.println(chunks);
+        for (String s : seen) if (!s.startsWith("chunk") && !s.startsWith("process")) System.out.println(s);
+        System.out.println("states " + states);
+        System.out.println("process always on EDT " + seen.stream().filter(s -> s.startsWith("process")).allMatch(s -> s.endsWith("true")));
+        System.out.println("progress ends at " + progress.get(progress.size() - 1) + " " + worker.getProgress());
+
+        SwingWorker<String, Void> failing = new SwingWorker<>() {
+            protected String doInBackground() { throw new IllegalStateException("boom"); }
+        };
+        failing.execute();
+        try {
+            failing.get();
+        } catch (ExecutionException e) {
+            System.out.println("EE " + e.getMessage() + " | " + e.getCause());
+        }
+        SwingWorker<String, Void> slow = new SwingWorker<>() {
+            protected String doInBackground() throws Exception { Thread.sleep(5000); return "late"; }
+        };
+        slow.execute();
+        Thread.sleep(50);
+        System.out.println("cancel " + slow.cancel(true) + " " + slow.isCancelled() + " " + slow.isDone());
+        try {
+            slow.get();
+        } catch (CancellationException e) {
+            System.out.println("CE " + e.getMessage());
+        }
+        try {
+            new SwingWorker<String, Void>() {
+                protected String doInBackground() throws Exception { Thread.sleep(500); return "x"; }
+            }.get(10, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            System.out.println("TE " + e.getMessage());
+        }
+        SwingWorker<Integer, Void> direct = new SwingWorker<>() {
+            protected Integer doInBackground() { return 7; }
+        };
+        direct.run();
+        System.out.println("run " + direct.get() + " " + direct.getState() + " " + SwingWorker.StateValue.valueOf("DONE"));
+        PropertyChangeSupport support = new PropertyChangeSupport("src");
+        support.addPropertyChangeListener(e -> System.out.println(e.getPropertyName() + ": " + e.getOldValue() + " -> " + e.getNewValue() + " from " + e.getSource()));
+        support.firePropertyChange("name", "a", "b");
+        support.firePropertyChange("same", "x", "x");
+        support.firePropertyChange("count", 1, 2);
+        support.firePropertyChange("flag", false, true);
+        support.addPropertyChangeListener("only", e -> System.out.println("only " + e.getNewValue()));
+        support.firePropertyChange("only", null, "v");
+        System.out.println(support.getPropertyChangeListeners().length + " " + support.hasListeners("only") + " " + support.hasListeners("other"));
+        PropertyChangeEvent ev = new PropertyChangeEvent("s", "p", 1, 2);
+        System.out.println(ev.getPropertyName() + " " + ev.getSource() + " " + ev.getOldValue() + " " + ev.getNewValue() + " " + ev);
+    }
+}
+"#
+);
+
+// An anonymous class created inside a LAMBDA is an ordinary class — its bare
+// calls reach its own inherited methods. It is named after the lambda's
+// synthesized class (`Lambda$1$1`), and was taken for one, so from a lambda in
+// a static method its `hit()` was "cannot be referenced from a static context".
+differential_test!(
+    an_anonymous_class_inside_a_lambda,
+    "AnonymousInLambda",
+    r#"
+import java.util.*;
+import java.util.function.*;
+public class AnonymousInLambda {
+    static abstract class Base {
+        int hits = 0;
+        void hit() { hits++; }
+        abstract String work();
+        public String toString() { return "Base" + hits; }
+    }
+    String name = "outer";
+    String shout(String s) { return s.toUpperCase(); }
+    void go() {
+        int local = 5;
+        Supplier<Base> make = () -> new Base() {
+            String work() {
+                hit();
+                return shout(name) + " " + local + " " + this.hits + " " + this + " " + AnonymousInLambda.this.name;
+            }
+        };
+        Base b = make.get();
+        System.out.println(b.work());
+        Runnable nested = () -> {
+            Runnable inner = () -> System.out.println("nested lambda " + shout("x") + local);
+            inner.run();
+            Comparator<String> byLength = new Comparator<String>() {
+                public int compare(String a, String c) { return Integer.compare(a.length(), c.length()); }
+            };
+            List<String> words = new ArrayList<>(Arrays.asList("ccc", "a", "bb"));
+            words.sort(byLength);
+            System.out.println(words + " " + byLength.compare("aa", "b"));
+        };
+        nested.run();
+    }
+    public static void main(String[] args) {
+        new AnonymousInLambda().go();
+    }
+}
+"#
+);
+
+// java.lang.Void — the type argument of nothing: `Callable<Void>`,
+// `SwingWorker<String, Void>`.
+differential_test!(
+    the_void_type,
+    "VoidType",
+    r#"
+import java.util.concurrent.*;
+public class VoidType {
+    public static void main(String[] args) throws Exception {
+        Callable<Void> c = () -> { System.out.println("called"); return null; };
+        Void v = c.call();
+        System.out.println(v + " " + Void.class.getName() + " " + Void.class.getSimpleName());
+        ExecutorService pool = Executors.newSingleThreadExecutor();
+        Future<Void> f = pool.submit(c);
+        System.out.println(f.get());
+        pool.shutdown();
+    }
+}
+"#
+);
+
+differential_wording!(
+    void_cannot_be_made,
+    "MakeVoid",
+    r#"
+public class MakeVoid {
+    public static void main(String[] args) {
+        Void v = new Void();
+    }
+}
+"#
+);
