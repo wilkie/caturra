@@ -155,6 +155,13 @@ pub(crate) struct Interpreter<'run> {
     /// treats it as a request honoured at the next safepoint, which is as
     /// close to "collect now" as a safepoint-based collector gets.
     gc_requested: bool,
+    /// The call about to run is `super.m()` into the builtin collection a
+    /// program class extends: the collection's own code, never the
+    /// program's override of it.
+    nonvirtual_collection_call: bool,
+    /// The receiver of a `super.toString()` into a builtin collection: its
+    /// OWN rendering, not the override that asked for it.
+    super_render: Option<HeapRef>,
     /// Values held by the interpreter itself across a run of the dispatch
     /// loop — which is to say, across a safepoint. `main`'s argument array is
     /// the one that matters: it is built before the entry class's `<clinit>`
@@ -347,6 +354,8 @@ impl<'run> Interpreter<'run> {
             init_failed: HashSet::new(),
             heap_budget: usize::MAX,
             gc_requested: false,
+            nonvirtual_collection_call: false,
+            super_render: None,
             temp_roots: Vec::new(),
             collect_always: std::env::var_os("CATURRA_GC_STRESS").is_some(),
             remaining_instructions: max_instructions,
@@ -1330,6 +1339,16 @@ impl<'run> Interpreter<'run> {
                     mark_ref(&mut marked, &mut work, origin.source);
                 }
             }
+            for (object, extension) in self.heap.extensions() {
+                if !marked.get(object as usize).copied().unwrap_or(false) {
+                    continue;
+                }
+                for value in &extension.fields {
+                    if let JValue::Ref(Some(reference)) = value {
+                        mark_ref(&mut marked, &mut work, *reference);
+                    }
+                }
+            }
             for ((map, _), view) in &self.map_views {
                 if marked.get(*map as usize).copied().unwrap_or(false) {
                     mark_ref(&mut marked, &mut work, *view);
@@ -2274,6 +2293,24 @@ impl<'run> Interpreter<'run> {
                                         },
                                     )
                                 }
+                                // A collection a program class extends: that
+                                // class and ITS supertypes, then everything
+                                // the collection itself answers to.
+                                Some(reference)
+                                    if let Some(extension) = self.heap.extension(reference) =>
+                                {
+                                    let class_name = extension.class_name.clone();
+                                    self.is_runtime_subtype(&class_name, &target)
+                                        || self.heap.get(reference).is_some_and(|object| {
+                                            kind_face(object) == Some(qualified_face(&target))
+                                        })
+                                        || self.extended_collection(&class_name).is_some_and(
+                                            |collection| {
+                                                library_faces(collection)
+                                                    .contains(&qualified_face(&target))
+                                            },
+                                        )
+                                }
                                 Some(reference) => match self.heap.get(reference) {
                                     Some(crate::value::HeapObject::Instance {
                                         class_name, ..
@@ -2423,6 +2460,37 @@ impl<'run> Interpreter<'run> {
                                     // this instruction (JVMS §5.5).
                                     frame.pc = addr;
                                     return Ok(Flow::InitChain(chain));
+                                }
+                                if let Some(collection) = self.extended_collection(&target) {
+                                    // A class that extends a builtin
+                                    // collection: the object IS that
+                                    // collection, and the class with its
+                                    // fields is recorded beside it.
+                                    let crate::value::HeapObject::Instance {
+                                        class_name,
+                                        layout,
+                                        fields,
+                                    } = self.new_instance(&target)
+                                    else {
+                                        unreachable!("new_instance makes an Instance")
+                                    };
+                                    let native =
+                                        intrinsics::instantiate(collection).ok_or_else(|| {
+                                            VmError::UnknownIntrinsic(format!(
+                                                "cannot instantiate {collection}"
+                                            ))
+                                        })?;
+                                    let reference = self.heap.alloc(native);
+                                    self.heap.set_extension(
+                                        reference,
+                                        crate::value::Extension {
+                                            class_name,
+                                            layout,
+                                            fields,
+                                        },
+                                    );
+                                    frame.stack.push(JValue::Ref(Some(reference)));
+                                    return Ok(Flow::Next);
                                 }
                                 self.new_instance(&target)
                             } else {
@@ -3227,9 +3295,11 @@ impl<'run> Interpreter<'run> {
     /// names the declaring class, so the first probe normally hits. A bare name
     /// is the fallback for the VM's own fields (a throwable's `__message`).
     fn resolve_field_slot(&self, owner: &str, name: &str, reference: HeapRef) -> Option<usize> {
-        let Some(crate::value::HeapObject::Instance { layout, .. }) = self.heap.get(reference)
-        else {
-            return None;
+        let layout = match self.heap.get(reference) {
+            Some(crate::value::HeapObject::Instance { layout, .. }) => layout,
+            // A collection a program class extends keeps that class's fields
+            // beside it, laid out the same way.
+            _ => &self.heap.extension(reference)?.layout,
         };
         let mut current = Some(owner);
         let mut steps = 0usize;
@@ -3283,6 +3353,14 @@ impl<'run> Interpreter<'run> {
         let slot = self
             .resolve_field_slot(&owner, &field_name, reference)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
+        if let Some(extension) = self.heap.extension(reference) {
+            let value = *extension
+                .fields
+                .get(slot)
+                .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
+            frame.stack.push(value);
+            return Ok(());
+        }
         let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get(reference)
         else {
             return Err(malformed(String::from("getfield on a non-object")));
@@ -3330,6 +3408,15 @@ impl<'run> Interpreter<'run> {
         let slot = self
             .resolve_field_slot(&owner, &field_name, reference)
             .ok_or_else(|| malformed(format!("unknown field {field_name}")))?;
+        // Not through `get_mut`, which counts a STRUCTURAL change: a field
+        // of the program class is not one of the collection's.
+        if let Some(extension) = self.heap.extension_mut(reference) {
+            *extension
+                .fields
+                .get_mut(slot)
+                .ok_or_else(|| malformed(format!("unknown field {field_name}")))? = value;
+            return Ok(());
+        }
         let Some(crate::value::HeapObject::Instance { fields, .. }) = self.heap.get_mut(reference)
         else {
             return Err(malformed(String::from("putfield on a non-object")));
@@ -3348,7 +3435,7 @@ impl<'run> Interpreter<'run> {
     #[allow(clippy::too_many_lines)] // user ctors + several intrinsic <init> forms
     fn invoke_special_op(
         &mut self,
-        class: &ClassFile,
+        class: &'run ClassFile,
         frame: &mut Frame<'run>,
         index: u16,
         malformed: &impl Fn(String) -> VmError,
@@ -3372,6 +3459,20 @@ impl<'run> Interpreter<'run> {
                 "java.lang.NullPointerException",
             )));
         };
+        // `super.add(x)` inside a class that extends a builtin collection: the
+        // collection's method, reached exactly as a virtual call reaches it —
+        // callbacks, comparators and all — except that the override which
+        // made the call is not looked for again.
+        if method_name != "<init>"
+            && EXTENDABLE_COLLECTIONS.contains(&target_class)
+            && self.heap.extension(receiver).is_some()
+        {
+            frame.stack.push(JValue::Ref(Some(receiver)));
+            frame.stack.extend(args.iter().copied());
+            self.recycle_vec(args);
+            self.nonvirtual_collection_call = true;
+            return self.invoke_virtual_op(class, frame, index, malformed);
+        }
         // A throwable fills its stack trace at CONSTRUCTION (the Throwable
         // constructor calls fillInStackTrace), so the trace names the `new`
         // site even if the exception is stored, thrown later, or rethrown.
@@ -4215,6 +4316,24 @@ impl<'run> Interpreter<'run> {
     /// superclass chain and formatting a `Declaring.name` key per field) once
     /// made allocation the most expensive operation in the VM; a pixel filter
     /// allocating hundreds of thousands of objects felt all of it.
+    /// The builtin collection a program class extends, walking its class
+    /// files' superclasses — `None` for an ordinary class.
+    fn extended_collection(&self, class_name: &str) -> Option<&'static str> {
+        let mut current = class_name;
+        for _ in 0..=self.classes.len() {
+            let class = self.classes.get(current)?;
+            let parent = class.constant_pool.get_class_name(class.super_class)?;
+            if !self.classes.contains_key(parent) {
+                return EXTENDABLE_COLLECTIONS
+                    .iter()
+                    .find(|collection| **collection == parent)
+                    .copied();
+            }
+            current = parent;
+        }
+        None
+    }
+
     fn new_instance(&mut self, class_name: &str) -> crate::value::HeapObject {
         if let Some((name, layout, defaults)) = self.field_templates.get(class_name) {
             return crate::value::HeapObject::Instance {
@@ -4838,7 +4957,24 @@ impl<'run> Interpreter<'run> {
         }
         // Copy out what we need before calling back into Java, which may
         // allocate and so cannot hold a borrow of the heap.
+        // A collection a program class extends renders through that class's
+        // own `toString`, when it has one.
+        let suppressed = self.super_render.take() == Some(reference);
+        let overridden = self
+            .heap
+            .extension(reference)
+            .filter(|_| !suppressed)
+            .and_then(|extension| {
+                resolve_virtual(
+                    self.classes,
+                    &extension.class_name,
+                    "toString",
+                    "()Ljava/lang/String;",
+                )
+                .map(|_| extension.class_name.to_string())
+            });
         let renderable = match self.heap.get(reference) {
+            _ if let Some(class_name) = overridden => Renderable::Instance(class_name),
             Some(HeapObject::Instance { class_name, .. }) => {
                 Renderable::Instance(class_name.to_string())
             }
@@ -5750,6 +5886,31 @@ impl<'run> Interpreter<'run> {
                 let elements = self.array_elements(*elements).ok_or_else(|| {
                     VmError::UnknownIntrinsic(String::from("addAll needs an array"))
                 })?;
+                // A JDK's `Collections.addAll` calls the collection's own
+                // `add` for each element — so a program class that extends
+                // the collection and overrides `add` sees every one.
+                if let Some(extension) = self.heap.extension(reference) {
+                    let class_name = extension.class_name.clone();
+                    if let Some((class, method)) = resolve_erased_override(
+                        self.classes,
+                        &class_name,
+                        "add",
+                        "(Ljava/lang/Object;)Z",
+                    ) {
+                        let mut changed = false;
+                        for element in elements {
+                            let callee = self.make_frame(
+                                class,
+                                method,
+                                vec![JValue::Ref(Some(reference)), element],
+                            )?;
+                            let returned = self.run_nested(callee)?;
+                            changed |= matches!(returned, Some(JValue::Int(1)));
+                        }
+                        frame.stack.push(JValue::Int(i32::from(changed)));
+                        return Ok(true);
+                    }
+                }
                 let changed = if self.heap.list_values(reference).is_some() {
                     let changed = !elements.is_empty();
                     if let Some(slot) = self.heap.list_values_mut(reference) {
@@ -16107,6 +16268,9 @@ impl<'run> Interpreter<'run> {
         if !self.init_started.contains(target) || self.init_failed.contains(target) {
             return None; // <clinit> has not run yet — or failed (byte path NCDFEs)
         }
+        if self.extended_collection(target).is_some() {
+            return None; // the object is a builtin collection; the byte path makes it
+        }
         let template = if let Some(template) = self.field_templates.get(target) {
             template.clone()
         } else {
@@ -16824,6 +16988,12 @@ impl<'run> Interpreter<'run> {
         index: u16,
         malformed: &impl Fn(String) -> VmError,
     ) -> Result<Option<Frame<'run>>, VmError> {
+        // Taken first, so no early answer below can leave it set for the next
+        // call.
+        let nonvirtual = std::mem::take(&mut self.nonvirtual_collection_call);
+        // Only the receiver's own rendering is suppressed, and only for this
+        // call: whatever the render path does not consume is dropped here.
+        self.super_render = None;
         // Borrowed from the class's constant pool, which outlives the run. These
         // were three String allocations on every single virtual call.
         let (target_class, method_name, descriptor) = class
@@ -17539,6 +17709,51 @@ impl<'run> Interpreter<'run> {
             }
             return Ok(None);
         }
+        // A collection a PROGRAM class extends: the class's own method wins —
+        // an override reached through the collection's interface included,
+        // which arrives with the collection's ERASED descriptor — and anything
+        // it does not declare is the collection's.
+        if nonvirtual && method_name == "toString" {
+            self.super_render = Some(receiver);
+        }
+        let target_class = if let Some(extension) = self.heap.extension(receiver)
+            && !nonvirtual
+        {
+            let class_name = extension.class_name.clone();
+            let found = resolve_virtual(self.classes, &class_name, method_name, descriptor)
+                .or_else(|| {
+                    (!self.classes.contains_key(target_class))
+                        .then(|| {
+                            resolve_erased_override(
+                                self.classes,
+                                &class_name,
+                                method_name,
+                                descriptor,
+                            )
+                        })
+                        .flatten()
+                });
+            if let Some((target, method)) = found {
+                let mut locals = self.take_vec(1 + args.len());
+                locals.push(JValue::Ref(Some(receiver)));
+                for (value, width) in args.iter().zip(widths.iter()) {
+                    locals.push(*value);
+                    if *width == 2 {
+                        locals.push(JValue::Int(0));
+                    }
+                }
+                self.recycle_vec(args);
+                return Ok(Some(self.make_frame(target, method, locals)?));
+            }
+            if self.classes.contains_key(target_class) {
+                self.extended_collection(&class_name)
+                    .unwrap_or(target_class)
+            } else {
+                target_class
+            }
+        } else {
+            target_class
+        };
         let is_reflect = matches!(
             self.heap.get(receiver),
             Some(
@@ -17976,6 +18191,11 @@ impl<'run> Interpreter<'run> {
                 }
                 if let Some((capacity, increment)) = self.heap.vector_capacity_of(receiver) {
                     self.heap.set_vector_capacity(cloned, capacity, increment);
+                }
+                // ...and so is the PROGRAM class a collection is an instance
+                // of, with its fields (`Object.clone` copies them shallowly).
+                if let Some(extension) = self.heap.extension(receiver).cloned() {
+                    self.heap.set_extension(cloned, extension);
                 }
                 frame.stack.push(JValue::Ref(Some(cloned)));
                 return Ok(None);
@@ -24505,6 +24725,9 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
     use crate::value::HeapObject;
     // A VIEW class wins: an `EnumMap` is a sorted map underneath and a `Vector`
     // is the same storage a `Stack` uses, and each still has to name itself.
+    if let Some(extension) = heap.extension(receiver) {
+        return extension.class_name.to_string();
+    }
     if let Some(view) = heap.view_class_of(receiver) {
         return String::from(view);
     }
@@ -25222,6 +25445,21 @@ fn object_class_of(heap: &Heap, reference: HeapRef) -> String {
     String::from("java/lang/Object")
 }
 
+/// The builtin collections a program class may extend.
+const EXTENDABLE_COLLECTIONS: &[&str] = &[
+    "java/util/ArrayList",
+    "java/util/LinkedList",
+    "java/util/HashMap",
+    "java/util/TreeMap",
+    "java/util/LinkedHashMap",
+    "java/util/HashSet",
+    "java/util/TreeSet",
+    "java/util/LinkedHashSet",
+    "java/util/ArrayDeque",
+    "java/util/PriorityQueue",
+    "java/util/Stack",
+];
+
 /// Whether a value of runtime class `value_class` fits an element of class
 /// `element`. Conservative in the safe direction: an element type whose
 /// subtypes caturra cannot enumerate accepts anything, so no legal program
@@ -25442,6 +25680,77 @@ fn stream_count_arg(value: JValue) -> usize {
 /// `Comparable` uses `compareTo(Object)` while the class declares
 /// `compareTo(Card)`). `None` means no user method matched.
 #[allow(clippy::too_many_lines)] // one resolution stage per JVMS step
+/// A program method that overrides a COLLECTION's, reached through the
+/// collection's interface: the call site carries the erased descriptor
+/// (`add(Ljava/lang/Object;)Z`), the program declares the method over its own
+/// types (`add(LCard;)Z`). The same name and the same parameter kinds — a
+/// primitive where the site has that primitive, a reference where it has a
+/// reference — is the override; javac would have written a bridge for it.
+fn resolve_erased_override<'run>(
+    classes: &'run HashMap<String, ClassFile>,
+    instance_class: &str,
+    method_name: &str,
+    descriptor: &str,
+) -> Option<(&'run ClassFile, &'run MethodInfo)> {
+    let kinds = |descriptor: &str| -> Option<Vec<String>> {
+        let params = descriptor.strip_prefix('(')?.split(')').next()?;
+        let mut kinds = Vec::new();
+        let mut chars = params.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                'L' => {
+                    for c in chars.by_ref() {
+                        if c == ';' {
+                            break;
+                        }
+                    }
+                    kinds.push(String::from("L"));
+                }
+                '[' => {
+                    while chars.peek() == Some(&'[') {
+                        chars.next();
+                    }
+                    if chars.next() == Some('L') {
+                        for c in chars.by_ref() {
+                            if c == ';' {
+                                break;
+                            }
+                        }
+                    }
+                    kinds.push(String::from("L"));
+                }
+                other => kinds.push(other.to_string()),
+            }
+        }
+        Some(kinds)
+    };
+    let wanted = kinds(descriptor)?;
+    let mut current = classes.get(instance_class);
+    for _ in 0..=classes.len() {
+        let candidate = current?;
+        if let Some(method) = candidate.methods.iter().find(|m| {
+            !m.access_flags
+                .contains(caturra_classfile::MethodAccessFlags::STATIC)
+                && !m
+                    .access_flags
+                    .contains(caturra_classfile::MethodAccessFlags::ABSTRACT)
+                && candidate.constant_pool.get_utf8(m.name_index) == Some(method_name)
+                && candidate
+                    .constant_pool
+                    .get_utf8(m.descriptor_index)
+                    .and_then(kinds)
+                    .is_some_and(|have| have == wanted)
+        }) {
+            return Some((candidate, method));
+        }
+        current = candidate
+            .constant_pool
+            .get_class_name(candidate.super_class)
+            .and_then(|parent| classes.get(parent));
+    }
+    None
+}
+
 fn resolve_virtual<'run>(
     classes: &'run HashMap<String, ClassFile>,
     instance_class: &str,

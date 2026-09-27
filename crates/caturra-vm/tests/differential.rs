@@ -49635,19 +49635,6 @@ public class OwnVariables {
 "#
 );
 
-stricter_than_javac!(
-    stricter_extending_a_builtin_collection,
-    "StrictExtendMap",
-    "import java.util.*;\n\
-public class StrictExtendMap {\n\
-  static class Counts extends HashMap<String, Integer> { int total() { return size(); } }\n\
-  public static void main(String[] args) {\n\
-    Counts c = new Counts();\n\
-    c.put(\"k\", 1);\n\
-    System.out.println(c.total());\n\
-  }\n}"
-);
-
 // A DIAMOND of a class with two type variables infers BOTH from the
 // constructor's arguments: inline, nested, in a list, under `var`, from a
 // `null` (which pins nothing — that variable is `Object`), and adopting a
@@ -64675,6 +64662,351 @@ public class SystemProps {
         System.out.println(System.getenv("CATURRA_SURELY_UNSET_VARIABLE") + " " + System.lineSeparator().equals(System.getProperty("line.separator")));
         t("getenv null", () -> System.getenv(null));
     }
+}
+"#
+);
+
+// A class that EXTENDS a builtin collection is that collection: its own
+// members, the collection's members (qualified and unqualified), held as the
+// collection's interfaces, walked by a for-each, handed to `Collections`,
+// copied, compared and hashed as the collection it is.
+differential_test!(
+    a_class_that_extends_a_collection,
+    "ExtendsACollection",
+    r#"
+import java.util.*;
+
+public class ExtendsACollection {
+    static class Card {
+        final String name;
+        Card(String name) { this.name = name; }
+        public String toString() { return name; }
+    }
+
+    static class Deck extends ArrayList<Card> {
+        private final String owner;
+        Deck(String owner) { this.owner = owner; }
+        Card top() { return get(size() - 1); }
+        String owner() { return owner; }
+    }
+
+    static class Counts extends HashMap<String, Integer> {
+        int total() {
+            int sum = 0;
+            for (int v : values()) sum += v;
+            return sum;
+        }
+        void bump(String k) { merge(k, 1, Integer::sum); }
+    }
+
+    public static void main(String[] args) {
+        Deck d = new Deck("ann");
+        d.add(new Card("A"));
+        d.add(new Card("K"));
+        System.out.println(d + " " + d.size() + " " + d.top() + " " + d.owner());
+        List<Card> view = d;
+        view.add(0, new Card("Q"));
+        System.out.println(d.get(0) + " " + (view == d) + " " + (d instanceof List) + " " + (d instanceof ArrayList));
+        for (Card c : d) System.out.print(c.name);
+        System.out.println();
+        Collections.reverse(d);
+        System.out.println(d + " " + d.getClass().getSimpleName() + " " + d.getClass().getSuperclass().getName());
+        Counts c = new Counts();
+        c.bump("a"); c.bump("a"); c.bump("b");
+        System.out.println(c + " " + c.total() + " " + c.get("a"));
+        Map<String, Integer> m = c;
+        System.out.println(m.equals(Map.of("a", 2, "b", 1)) + " " + c.hashCode() + " " + new HashMap<>(c));
+    }
+}
+"#
+);
+
+// ...an override wins however the call arrives (through `List`, and through
+// `Collections.addAll`, which calls `add` per element — where `addAll(List)`
+// does not), `super.add` is the collection's own, `toString` renders the
+// override inside nested printing, a constructor passes arguments up to the
+// collection's, and an anonymous subclass with an initializer block (the
+// "double brace") is one too.
+differential_test!(
+    a_collection_subclass_overrides_and_calls_super,
+    "CollectionOverrides",
+    r##"
+import java.util.*;
+
+public class CollectionOverrides {
+    // An override that counts, and calls super.
+    static class CountingList extends ArrayList<String> {
+        int adds = 0;
+        @Override
+        public boolean add(String s) {
+            adds++;
+            return super.add(s.toUpperCase());
+        }
+        @Override
+        public String toString() { return "CL" + super.toString() + "#" + adds; }
+    }
+
+    static class Named extends TreeMap<String, Integer> {
+        private final String name;
+        Named(String name, Map<String, Integer> seed) {
+            super(seed);
+            this.name = name;
+        }
+        String describe() { return name + ":" + firstKey() + ".." + lastKey() + "=" + size(); }
+    }
+
+    static class Ranked extends PriorityQueue<Integer> {
+        Ranked() { super(Comparator.reverseOrder()); }
+    }
+
+    static class Special extends CountingList {
+        @Override
+        public boolean add(String s) { return super.add("*" + s); }
+    }
+
+    public static void main(String[] args) {
+        CountingList cl = new CountingList();
+        cl.add("a");
+        List<String> asList = cl;
+        asList.add("b");
+        Collections.addAll(cl, "c", "d");
+        cl.addAll(List.of("e"));
+        System.out.println(cl + " " + cl.adds + " " + cl.size() + " " + asList);
+        System.out.println(String.valueOf(cl) + " | " + ("" + asList));
+
+        Map<String, Integer> fruit = new HashMap<String, Integer>() {{
+            put("apple", 3);
+            put("pear", 5);
+        }};
+        System.out.println(fruit + " " + fruit.getClass().getName() + " " + fruit.getClass().getSuperclass().getSimpleName());
+
+        List<Integer> nums = new ArrayList<>(List.of(3, 1, 2)) {{ add(9); sort(null); }};
+        System.out.println(nums + " " + nums.size());
+
+        Named n = new Named("n", Map.of("b", 2, "a", 1, "c", 3));
+        System.out.println(n.describe() + " " + n.headMap("b") + " " + n);
+
+        Ranked r = new Ranked();
+        r.addAll(List.of(4, 9, 1));
+        System.out.println(r.poll() + " " + r.peek() + " " + r.size());
+
+        Special sp = new Special();
+        sp.add("x");
+        ((List<String>) sp).add("y");
+        System.out.println(sp + " " + (sp instanceof CountingList) + " " + sp.getClass().getSuperclass().getSimpleName());
+
+        Object o = cl;
+        if (o instanceof CountingList) {
+            CountingList back = (CountingList) o;
+            System.out.println("back " + back.adds + " " + back.get(0));
+        }
+        System.out.println(cl.equals(List.of("A", "B", "C", "D", "E")) + " " + List.of("A", "B", "C", "D", "E").equals(cl) + " " + (cl.hashCode() == List.of("A", "B", "C", "D", "E").hashCode()));
+        Set<List<String>> set = new HashSet<>();
+        set.add(cl);
+        System.out.println(set.contains(List.of("A", "B", "C", "D", "E")));
+    }
+}
+"##
+);
+
+// ...lambdas and streams over one (the lambda pass reads the receiver as the
+// collection it is), a GENERIC subclass (`Bag<T> extends ArrayList<T>`), and
+// the program class's fields surviving a collection.
+differential_test!(
+    a_collection_subclass_with_lambdas_and_generics,
+    "CollectionSubclassLambdas",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class CollectionSubclassLambdas {
+    static class Scores extends ArrayList<Integer> {
+        final String who;
+        Scores(String who) { this.who = who; }
+        int best() { return stream().mapToInt(Integer::intValue).max().orElse(-1); }
+        List<Integer> over(int line) { return stream().filter(s -> s > line).collect(Collectors.toList()); }
+        void dropBelow(int line) { removeIf(s -> s < line); }
+        @Override public String toString() { return who + super.toString(); }
+    }
+
+    static class Bag<T> extends ArrayList<T> {
+        T first() { return get(0); }
+    }
+
+    static class Tally extends TreeMap<String, Integer> {
+        void count(String w) { merge(w, 1, Integer::sum); }
+    }
+
+    public static void main(String[] args) {
+        Scores s = new Scores("s");
+        s.addAll(List.of(5, 12, 7, 20));
+        System.out.println(s.best() + " " + s.over(6) + " " + s);
+        s.dropBelow(7);
+        s.sort(Comparator.reverseOrder());
+        System.out.println(s + " " + s.size());
+        s.forEach(x -> System.out.print(x + ";"));
+        System.out.println();
+        System.out.println(s.stream().map(x -> x * 2).collect(Collectors.toList()));
+        List<Scores> all = new ArrayList<>();
+        all.add(s);
+        System.out.println(all + " " + Map.of("k", s));
+
+        Bag<String> b = new Bag<>();
+        b.add("x"); b.add("y");
+        String f = b.first();
+        System.out.println(f + " " + b + " " + b.get(1).length());
+
+        Tally t = new Tally();
+        for (String w : "b a b c a b".split(" ")) t.count(w);
+        System.out.println(t + " " + t.firstKey() + " " + t.descendingMap());
+        t.entrySet().removeIf(e -> e.getValue() < 2);
+        System.out.println(t);
+
+        List<Scores> many = new ArrayList<>();
+        for (int i = 0; i < 20000; i++) { Scores x = new Scores("n" + i); x.add(i); if (i % 1000 == 0) many.add(x); }
+        System.gc();
+        StringBuilder sb = new StringBuilder();
+        for (Scores x : many) sb.append(x.who).append(x.get(0)).append(',');
+        System.out.println(sb.length() + " " + many.get(19) + " " + many.get(19).who);
+    }
+}
+"#
+);
+
+// ...and every collection class that can be extended, each with its own
+// methods and its own fail-fast cursor.
+differential_test!(
+    every_extendable_collection,
+    "EveryExtendableCollection",
+    r#"
+import java.util.*;
+
+public class EveryExtendableCollection {
+    static class Hist extends LinkedList<String> { String last() { return getLast(); } }
+    static class Work extends ArrayDeque<Integer> { int tag = 7; }
+    static class Plates extends Stack<String> { String top() { return peek(); } }
+    static class Seen extends HashSet<String> { boolean saw(String s) { return !add(s); } }
+    static class Sorted extends TreeSet<Integer> { Sorted() { super(Comparator.reverseOrder()); } }
+    static class Ordered extends LinkedHashSet<Character> {}
+    static class Book extends LinkedHashMap<String, String> { String lookup(String k) { return getOrDefault(k, "?"); } }
+    static class Jobs extends PriorityQueue<String> {}
+
+    public static void main(String[] args) {
+        Hist h = new Hist(); h.add("a"); h.addFirst("z"); h.add("b");
+        System.out.println(h + " " + h.last() + " " + h.peekFirst() + " " + h.getClass().getSimpleName());
+        Work w = new Work(); w.push(1); w.offerLast(2); w.addFirst(0);
+        System.out.println(w + " " + w.pop() + " " + w.tag + " " + w.size());
+        Plates p = new Plates(); p.push("x"); p.push("y");
+        System.out.println(p + " " + p.top() + " " + p.search("x") + " " + p.pop() + p.empty());
+        Seen s = new Seen();
+        System.out.println(s.saw("a") + " " + s.saw("a") + " " + s.contains("a") + " " + s);
+        Sorted t = new Sorted(); t.addAll(List.of(3, 9, 1));
+        System.out.println(t + " " + t.first() + " " + t.headSet(3) + " " + t.comparator().compare(1, 2));
+        Ordered o = new Ordered(); for (char c : "hello".toCharArray()) o.add(c);
+        System.out.println(o + " " + o.iterator().next());
+        Book b = new Book(); b.put("k", "v"); b.put("a", "b");
+        System.out.println(b + " " + b.lookup("k") + b.lookup("q") + " " + b.keySet() + " " + b.entrySet().iterator().next().getKey());
+        Jobs j = new Jobs(); j.add("m"); j.add("c"); j.add("x");
+        System.out.println(j.poll() + " " + j.size() + " " + (j instanceof Queue));
+        Iterator<String> it = h.iterator();
+        h.add("late");
+        try { it.next(); } catch (ConcurrentModificationException e) { System.out.println("CME"); }
+    }
+}
+"#
+);
+
+// `clone()` of one is an instance of the program class, its fields copied —
+// and a concrete collection class is `Cloneable` (an interface is not).
+differential_test!(
+    a_collection_subclass_clones_as_itself,
+    "CollectionSubclassClone",
+    r#"
+import java.util.*;
+
+public class CollectionSubclassClone {
+    static class Card {}
+    static class Deck extends ArrayList<Card> { int n; }
+    public static void main(String[] args) {
+        ArrayList<String> a = new ArrayList<>();
+        Cloneable k = a;
+        java.io.Serializable z = a;
+        Object o = new HashMap<String, Integer>();
+        System.out.println((k == z) + " " + (o instanceof Cloneable) + " " + (List.of() instanceof Cloneable));
+        Deck d = new Deck();
+        d.n = 4;
+        ArrayList<Card> aa = d;
+        RandomAccess r = d;
+        Cloneable kk = d;
+        java.io.Serializable zz = d;
+        Deck copy = (Deck) d.clone();
+        System.out.println(copy.getClass().getName() + " " + copy.n + " " + (copy != d));
+    }
+}
+"#
+);
+
+// The negative direction: a subclass is ITS collection, not any other — and
+// javac names the class, not the collection, in the refusal.
+differential_wording!(
+    a_collection_subclass_is_not_any_list,
+    "SubclassNotAnyList",
+    r#"
+import java.util.*;
+
+public class SubclassNotAnyList {
+    static class Card {}
+    static class Deck extends ArrayList<Card> {}
+    public static void main(String[] args) {
+        Deck d = new Deck();
+        List<String> l = d;
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_collection_subclass_takes_only_its_element,
+    "SubclassElement",
+    r#"
+import java.util.*;
+
+public class SubclassElement {
+    static class Card {}
+    static class Deck extends ArrayList<Card> {}
+    public static void main(String[] args) {
+        Deck d = new Deck();
+        d.add("x");
+    }
+}
+"#
+);
+
+// `@Override` in one must name one of the collection's members.
+differential_wording!(
+    an_override_of_nothing_in_a_collection_subclass,
+    "SubclassOverride",
+    r#"
+import java.util.*;
+
+public class SubclassOverride {
+    static class Deck extends ArrayList<String> {
+        @Override public int sizee() { return 1; }
+    }
+    public static void main(String[] args) {}
+}
+"#
+);
+
+// `StringBuilder`, `StringBuffer` and `Scanner` are FINAL, which is what
+// javac says; the refusal used to blame caturra.
+differential_wording!(
+    a_final_library_class_cannot_be_extended,
+    "ExtendsFinal",
+    r#"
+public class ExtendsFinal {
+    static class Loud extends StringBuilder {}
+    public static void main(String[] args) {}
 }
 "#
 );

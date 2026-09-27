@@ -548,6 +548,15 @@ pub enum PrintSink {
     Text(HeapRef),
 }
 
+/// What makes a builtin collection an instance of a PROGRAM class that
+/// extends it: the class, and its fields laid out as an `Instance`'s are.
+#[derive(Debug, Clone)]
+pub struct Extension {
+    pub class_name: std::rc::Rc<str>,
+    pub layout: std::rc::Rc<ClassLayout>,
+    pub fields: Vec<JValue>,
+}
+
 /// Where each of a class's instance fields lives in an object.
 ///
 /// Fields are keyed `Declaring.name`: a subclass may hide a superclass field of
@@ -1671,6 +1680,11 @@ pub struct Heap {
     /// message was answering the generic name while `getClass()` answered the
     /// real one.
     view_class: std::collections::HashMap<HeapRef, &'static str>,
+    /// The PROGRAM class of an object whose class extends a builtin
+    /// collection (`class Deck extends ArrayList<Card>`), and that class's own
+    /// fields. The heap slot holds the collection itself, so every library
+    /// call sees an ordinary one; what makes it a `Deck` lives here.
+    extended: std::collections::HashMap<HeapRef, Extension>,
     /// What class the entries of a map or of a map VIEW answer to, where it
     /// is not the map's own inner node: an immutable map's are
     /// `KeyValueHolder`s and a `Collections.unmodifiableMap`'s are that
@@ -1796,6 +1810,7 @@ impl Default for Heap {
             wrapper_cache: std::collections::HashMap::new(),
             enum_pool: std::collections::HashMap::new(),
             view_class: std::collections::HashMap::new(),
+            extended: std::collections::HashMap::new(),
             entry_class: std::collections::HashMap::new(),
             vector_capacity: std::collections::HashMap::new(),
             chm_cursors: std::collections::HashMap::new(),
@@ -1973,6 +1988,30 @@ impl Heap {
         self.vector_capacity.get(&reference).copied()
     }
 
+    /// Make a collection an instance of a program class that extends it.
+    pub fn set_extension(&mut self, reference: HeapRef, extension: Extension) {
+        self.extended.insert(reference, extension);
+    }
+
+    /// The program class (and its fields) of a collection a program class
+    /// extends.
+    #[must_use]
+    pub fn extension(&self, reference: HeapRef) -> Option<&Extension> {
+        self.extended.get(&reference)
+    }
+
+    /// The same, for writing a field.
+    pub fn extension_mut(&mut self, reference: HeapRef) -> Option<&mut Extension> {
+        self.extended.get_mut(&reference)
+    }
+
+    /// Every extended object's program-class fields, for the collector.
+    pub fn extensions(&self) -> impl Iterator<Item = (HeapRef, &Extension)> + '_ {
+        self.extended
+            .iter()
+            .map(|(reference, extension)| (*reference, extension))
+    }
+
     /// The class a view answers to, if it is one.
     #[must_use]
     pub fn view_class_of(&self, reference: HeapRef) -> Option<&'static str> {
@@ -2051,6 +2090,7 @@ impl Heap {
                 && (*key >= CHM_TOKEN_BASE || alive(HeapRef::try_from(*key).unwrap_or(0)))
         });
         self.view_class.retain(|reference, _| alive(*reference));
+        self.extended.retain(|reference, _| alive(*reference));
         self.entry_class.retain(|reference, _| alive(*reference));
         self.vector_capacity
             .retain(|reference, _| alive(*reference));

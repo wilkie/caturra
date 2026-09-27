@@ -110,13 +110,21 @@ fn emit_class(
         None
     };
     let super_name = if let Some(anon) = &anon_super {
-        anon.as_str()
+        anon.clone()
     } else {
         decl.superclass
             .as_deref()
-            .map_or("java/lang/Object", |name| {
+            .map_or(String::from("java/lang/Object"), |name| {
                 // `extends Exception` etc: the parent is a library throwable.
-                caturra_classfile::exceptions::internal_name_of(name).unwrap_or(name)
+                // `extends ArrayList<Card>`: a builtin collection.
+                caturra_classfile::exceptions::internal_name_of(name).map_or_else(
+                    || {
+                        extendable_collection(name)
+                            .filter(|_| table.class_id(name).is_none())
+                            .map_or_else(|| name.to_owned(), extendable_collection_internal)
+                    },
+                    str::to_owned,
+                )
             })
     };
     // A supertype named in SOURCE (`extends Inner`, `implements Face`) is
@@ -127,7 +135,7 @@ fn emit_class(
             .class_id(name)
             .map_or_else(|| name.to_owned(), |id| table.class_name(id).to_owned())
     };
-    class.super_class = intern_class(&mut class.constant_pool, &emitted_name(super_name));
+    class.super_class = intern_class(&mut class.constant_pool, &emitted_name(&super_name));
 
     // SourceFile attribute: which compilation unit this class came
     // from — the debugger keys breakpoints by (file, line).
@@ -589,6 +597,11 @@ struct ClassInfo {
     /// `extends Exception` etc: a library throwable parent (internal
     /// name). Mutually exclusive with `superclass`.
     library_superclass: Option<&'static str>,
+    /// `extends ArrayList<Card>`: the builtin COLLECTION this class extends,
+    /// as written. An instance IS that collection at run time (the VM keeps
+    /// the class's own fields beside it), and every member the class does not
+    /// declare is the collection's.
+    builtin_face: Option<TypeRef>,
     interfaces: Vec<ClassId>,
     is_abstract: bool,
     is_interface: bool,
@@ -1120,6 +1133,7 @@ impl MethodTable {
                 id: object_id,
                 superclass: None,
                 library_superclass: None,
+                builtin_face: None,
                 interfaces: Vec::new(),
                 enclosing: None,
                 is_abstract: false,
@@ -1236,6 +1250,7 @@ impl MethodTable {
                 id: comparable_id,
                 superclass: None,
                 library_superclass: None,
+                builtin_face: None,
                 interfaces: Vec::new(),
                 enclosing: None,
                 is_abstract: true,
@@ -1302,6 +1317,7 @@ impl MethodTable {
                     id,
                     superclass: None,
                     library_superclass: None,
+                    builtin_face: None,
                     // `Closeable` IS-A `AutoCloseable` — the edge makes a
                     // `Closeable` resource widen, and `implements Closeable`
                     // satisfy a try-with-resources.
@@ -1452,6 +1468,7 @@ impl MethodTable {
                     id,
                     superclass: None,
                     library_superclass: None,
+                    builtin_face: None,
                     interfaces: Vec::new(),
                     enclosing: None,
                     is_abstract: true,
@@ -1511,6 +1528,7 @@ impl MethodTable {
                     // the way they do on any other reference.
                     superclass: Some(object_id),
                     library_superclass: None,
+                    builtin_face: None,
                     interfaces: Vec::new(),
                     enclosing: None,
                     is_abstract: true,
@@ -1584,6 +1602,7 @@ impl MethodTable {
                     id,
                     superclass: Some(object_id),
                     library_superclass: None,
+                    builtin_face: None,
                     // `Enum<E> implements Comparable<E>` — an `Enum<?>` is
                     // sortable, which is how a heterogeneous enum list is
                     // ordered.
@@ -1673,6 +1692,7 @@ impl MethodTable {
                         id,
                         superclass: None,
                         library_superclass: None,
+                        builtin_face: None,
                         interfaces: Vec::new(),
                         enclosing: class.enclosing.clone(),
                         is_abstract: false,
@@ -1902,6 +1922,7 @@ impl MethodTable {
                 }
 
                 let mut library_superclass = None;
+                let mut builtin_face = None;
                 let superclass = class.superclass.as_ref().and_then(|name| {
                     // An anonymous class's supertype lands here whether it is a class
                     // or an interface, so it needs the same aliasing the `implements`
@@ -1928,6 +1949,24 @@ impl MethodTable {
                             caturra_classfile::exceptions::internal_name_of(name)
                         {
                             library_superclass = Some(internal);
+                        } else if let Some(simple) = extendable_collection(name) {
+                            // `extends ArrayList<Card>`: the collection, as
+                            // written — its type arguments were recorded by
+                            // the parser under the name the source used.
+                            let args = class
+                                .supertype_args
+                                .iter()
+                                .find(|(parent, _)| parent == name)
+                                .map(|(_, args)| args.clone())
+                                .unwrap_or_default();
+                            builtin_face = Some(if args.is_empty() {
+                                TypeRef::Named(simple.to_owned())
+                            } else {
+                                TypeRef::Generic {
+                                    base: simple.to_owned(),
+                                    args,
+                                }
+                            });
                         } else {
                             diagnostics.push(Diagnostic::error(
                                 path,
@@ -1993,6 +2032,7 @@ impl MethodTable {
                     None
                 };
                 info.library_superclass = library_superclass;
+                info.builtin_face = builtin_face;
                 info.interfaces = interface_ids;
                 info.is_abstract = class.is_abstract;
                 info.is_final_class = class.is_final;
@@ -2749,7 +2789,26 @@ impl MethodTable {
                         .iter()
                         .map(|p| self.resolve_type(&p.ty).unwrap_or(JType::Unsupported))
                         .collect();
-                    if !self.overrides_something(info.id, &method.name, &params) {
+                    // A class that extends a builtin collection overrides
+                    // that collection's members by name (their parameter
+                    // types are the collection's, which the table knows
+                    // only by kind), and the two PROTECTED hooks no table
+                    // lists.
+                    let collection_member = match self.builtin_face_ref(info.id) {
+                        Some(TypeRef::Named(base) | TypeRef::Generic { base, .. }) => {
+                            collection_has_method(base, &method.name)
+                                || (method.name == "removeRange"
+                                    && matches!(
+                                        base.as_str(),
+                                        "ArrayList" | "LinkedList" | "Stack"
+                                    ))
+                                || (method.name == "removeEldestEntry" && base == "LinkedHashMap")
+                        }
+                        _ => false,
+                    };
+                    if !collection_member
+                        && !self.overrides_something(info.id, &method.name, &params)
+                    {
                         diagnostics.push(Diagnostic::error(
                             path,
                             String::from(
@@ -2811,6 +2870,14 @@ impl MethodTable {
     /// `java/lang/Object` when it implements an interface, otherwise
     /// the class it extends.
     fn anon_super_name(&self, name: &str) -> String {
+        if let Some(face) = self
+            .class_id(name)
+            .and_then(|id| self.info_by_id(id))
+            .and_then(|info| info.builtin_face.as_ref())
+            && let TypeRef::Named(base) | TypeRef::Generic { base, .. } = face
+        {
+            return extendable_collection_internal(base);
+        }
         self.info(name)
             .and_then(|info| info.superclass)
             .map_or_else(
@@ -4398,6 +4465,77 @@ impl MethodTable {
             }
             other => type_from_ref(other),
         }
+    }
+
+    /// The class that WRITES the `extends` of a builtin collection — this one
+    /// or a program ancestor.
+    fn face_owner(&self, class: ClassId) -> Option<ClassId> {
+        let mut current = Some(class);
+        for _ in 0..=self.class_names.len() {
+            let id = current?;
+            let info = self.info_by_id(id)?;
+            if info.builtin_face.is_some() {
+                return Some(id);
+            }
+            current = info.superclass;
+        }
+        None
+    }
+
+    /// The builtin collection this class extends — itself or through a
+    /// program parent — as the source wrote it.
+    fn builtin_face_ref(&self, class: ClassId) -> Option<&TypeRef> {
+        let mut current = Some(class);
+        let mut steps = 0usize;
+        while let Some(id) = current {
+            steps += 1;
+            if steps > self.class_names.len() + 1 {
+                return None;
+            }
+            let info = self.info_by_id(id)?;
+            if let Some(face) = &info.builtin_face {
+                return Some(face);
+            }
+            current = info.superclass;
+        }
+        None
+    }
+
+    /// The builtin collection TYPE an instance of this class is: its
+    /// `extends ArrayList<Card>` as a `List<Card>`. A type argument that does
+    /// not resolve (the class's own type variable) reads as the RAW face.
+    fn builtin_face(&self, class: ClassId) -> Option<JType> {
+        let written = self.builtin_face_ref(class)?;
+        // The class's own type VARIABLES, as the sentinels the resolver reads
+        // as variables: `Bag<T> extends ArrayList<T>` is a list of `T`, which
+        // a `Bag<String>` receiver substitutes.
+        let owner = self.face_owner(class)?;
+        let params = &self.info_by_id(owner)?.type_param_names;
+        let written = match written {
+            TypeRef::Generic { base, args } if !params.is_empty() => TypeRef::Generic {
+                base: base.clone(),
+                args: args
+                    .iter()
+                    .map(|arg| match arg {
+                        TypeRef::Named(name) => params
+                            .iter()
+                            .position(|p| p == name)
+                            .and_then(|at| u8::try_from(at).ok())
+                            .map_or_else(
+                                || arg.clone(),
+                                |at| TypeRef::Named(crate::parser::typevar_sentinel(at)),
+                            ),
+                        other => other.clone(),
+                    })
+                    .collect(),
+            },
+            other => other.clone(),
+        };
+        let written = &written;
+        self.resolve_type(written).or_else(|| match written {
+            TypeRef::Generic { base, .. } => self.resolve_type(&TypeRef::Named(base.clone())),
+            _ => None,
+        })
     }
 
     /// The library throwable this class descends from, if any: walks
@@ -8919,6 +9057,10 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (JType::List { .. } | JType::Stack(_), JType::Object(id))
                 if table.class_id("RandomAccess") == Some(id)
         )
+        // ...and the concrete collection CLASSES to `Cloneable`, which each
+        // implements (the interfaces do not).
+        || (matches!(to, JType::Object(id) if table.class_id("Cloneable") == Some(id))
+            && is_cloneable_collection(from))
         // A `String` and the wrappers implement `Comparable`, so they assign to
         // a `Comparable<T>` variable — the erased interface caturra registers
         // for a user class to implement. The VM dispatches `compareTo` on the
@@ -9485,6 +9627,16 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (JType::Uuid, JType::Object(id))
                 if id == table.object_id || table.class_id("Comparable") == Some(id)
         )
+        // A class that EXTENDS a builtin collection is that collection, and
+        // widens to whatever the collection widens to: a `Deck extends
+        // ArrayList<Card>` is a `List<Card>`, a `Collection<Card>`, an
+        // `Iterable<Card>`.
+        || match from {
+            JType::Object(id) | JType::Generic { class: id, .. } if from != to => table
+                .builtin_face(id)
+                .is_some_and(|face| face == to || widens(face, to, table)),
+            _ => false,
+        }
 }
 
 /// The declared access level of a method: 3 public, 2 protected, 1
@@ -11833,32 +11985,93 @@ fn is_null_expression(expr: &Expr) -> bool {
     }
 }
 
-/// The honest reason a BUILTIN collection cannot be a supertype. Extending one
-/// (`new ArrayList<>() { … }`, `class MyList extends ArrayList<String>`) is
-/// ordinary Java, but caturra's collections are VM objects with no class file
-/// to inherit from — so saying "cannot find symbol: class `ArrayList`" about a
-/// class the very next line uses reads as our bug.
+/// A concrete collection CLASS, which implements `Cloneable` — `ArrayList`,
+/// `HashMap`, `ArrayDeque` and the rest; the interfaces do not.
+fn is_cloneable_collection(ty: JType) -> bool {
+    matches!(
+        ty,
+        JType::List {
+            face: CollFace::Concrete,
+            ..
+        } | JType::Stack(_)
+            | JType::Map {
+                face: CollFace::Concrete | CollFace::Linked,
+                ..
+            }
+            | JType::Set {
+                face: CollFace::Concrete | CollFace::Linked,
+                ..
+            }
+    )
+}
+
+/// Whether a builtin collection type has a member taking these arguments.
+fn face_answers(face: JType, method: &str, arg_types: &[JType], table: &MethodTable) -> bool {
+    let elem = TypeArgs::of(face);
+    builtin_instance_table(face).is_some_and(|(_, methods)| {
+        pick_builtin(methods, method, arg_types, elem, table).is_some()
+            || methods.iter().any(|m| m.name == method)
+    }) || pick_builtin(OBJECT_METHODS, method, arg_types, elem, table).is_some()
+}
+
+/// The builtin collections a program class may EXTEND (`class Deck extends
+/// ArrayList<Card>`, `new HashMap<String, Integer>() {{ put("a", 1); }}`),
+/// by their simple name. An instance is the collection itself at run time.
+const EXTENDABLE_COLLECTIONS: &[&str] = &[
+    "ArrayList",
+    "LinkedList",
+    "HashMap",
+    "TreeMap",
+    "LinkedHashMap",
+    "HashSet",
+    "TreeSet",
+    "LinkedHashSet",
+    "ArrayDeque",
+    "PriorityQueue",
+    "Stack",
+];
+
+/// The simple name of an extendable builtin collection, however the source
+/// spelled it (`ArrayList` or `java.util.ArrayList`).
+pub(crate) fn extendable_collection(name: &str) -> Option<&'static str> {
+    let simple = name.strip_prefix("java.util.").unwrap_or(name);
+    EXTENDABLE_COLLECTIONS
+        .iter()
+        .find(|candidate| **candidate == simple)
+        .copied()
+}
+
+/// Whether an extendable builtin collection has a member of this name.
+pub(crate) fn collection_has_method(simple: &str, method: &str) -> bool {
+    let table: &[BuiltinMethod] = match simple {
+        "ArrayList" => LIST_METHODS,
+        "Stack" => STACK_METHODS,
+        "LinkedList" => LINKEDLIST_METHODS,
+        "ArrayDeque" => DEQUE_METHODS,
+        "PriorityQueue" => QUEUE_METHODS,
+        "HashMap" | "LinkedHashMap" => MAP_METHODS,
+        "TreeMap" => TREEMAP_METHODS,
+        "HashSet" | "LinkedHashSet" => SET_METHODS,
+        "TreeSet" => TREESET_METHODS,
+        _ => return false,
+    };
+    table.iter().any(|m| m.name == method)
+}
+
+/// The internal name of an extendable builtin collection.
+fn extendable_collection_internal(simple: &str) -> String {
+    format!("java/util/{simple}")
+}
+
+/// The honest reason a library class cannot be a supertype: the ones the JDK
+/// declares FINAL. (The collections can be extended; see
+/// [`EXTENDABLE_COLLECTIONS`].)
 fn builtin_supertype_reason(name: &str) -> Option<String> {
-    const BUILTIN_COLLECTIONS: &[&str] = &[
-        "ArrayList",
-        "LinkedList",
-        "HashMap",
-        "TreeMap",
-        "HashSet",
-        "TreeSet",
-        "ArrayDeque",
-        "PriorityQueue",
-        "Stack",
-        "StringBuilder",
-        "StringBuffer",
-        "Scanner",
-    ];
-    BUILTIN_COLLECTIONS.contains(&name).then(|| {
-        format!(
-            "extending {name} is not supported by caturra (its collections are \
-             built into the VM, so there is no class to inherit from)"
-        )
-    })
+    // These three are FINAL in the JDK, and javac says so.
+    const FINAL_LIBRARY_CLASSES: &[&str] = &["StringBuilder", "StringBuffer", "Scanner"];
+    FINAL_LIBRARY_CLASSES
+        .contains(&name)
+        .then(|| format!("cannot inherit from final {name}"))
 }
 
 fn const_from_literal(lit: &Literal) -> Option<crate::constfold::ConstValue> {
@@ -26613,6 +26826,14 @@ fn bparam_matches(
     table: &MethodTable,
     face: Option<&str>,
 ) -> bool {
+    // A class that extends a builtin collection passes wherever that
+    // collection would: `list.addAll(deck)`, `String.join(",", names)`.
+    if let JType::Object(id) | JType::Generic { class: id, .. } = arg
+        && let Some(collection) = table.builtin_face(id)
+        && bparam_matches(param, collection, args, table, face)
+    {
+        return true;
+    }
     match param {
         BParam::Throwable => {
             // `null` is a Throwable too — `addSuppressed(null)` and
@@ -31336,7 +31557,75 @@ impl BodyGen<'_> {
     /// Emit `super(...)`/`this(...)`-style constructor invocation with
     /// `this` (slot 0) as the receiver.
     #[allow(clippy::too_many_lines)] // one super-call dispatch (exception ctors)
+    /// Whether a PROGRAM class (not the synthetic `Object` above every one)
+    /// declares a method that takes these arguments — in which case it, and
+    /// not a builtin collection the class extends, answers the call.
+    fn program_declares(&self, class_name: &str, method: &str, arg_types: &[JType]) -> bool {
+        matches!(
+            self.table.resolve(class_name, method, arg_types),
+            Resolution::Found(_)
+        ) && self
+            .table
+            .declaring_class(class_name, method)
+            .is_some_and(|owner| owner != self.table.class_name(self.table.object_id))
+    }
+
+    /// `super(args)` in a class that extends a builtin collection. The
+    /// constructor is chosen, and its arguments checked and converted, by the
+    /// same code that compiles `new ArrayList<Card>(args)`; that code begins
+    /// with `new`/`dup`, which here become `aload_0`/`nop` — the receiver is
+    /// `this`, and nothing is left on the stack afterwards.
+    fn collection_super_constructor(&mut self, simple: &str, args: &[Expr], span: SourceSpan) {
+        // A class's own type VARIABLE (`Bag<T> extends ArrayList<T>`) is no
+        // element a constructor can check against; the diamond is what the
+        // erasure means.
+        let type_args = match self.table.builtin_face_ref(self.current_class_id) {
+            Some(TypeRef::Generic { args, .. })
+                if !args.iter().any(|arg| {
+                    matches!(arg, TypeRef::Named(name)
+                        if crate::parser::typevar_index(name).is_some()
+                            || self.table.face_owner(self.current_class_id)
+                                .and_then(|owner| self.table.info_by_id(owner))
+                                .is_some_and(|info| info.type_param_names.contains(name)))
+                }) =>
+            {
+                args.clone()
+            }
+            _ => Vec::new(),
+        };
+        let start = self.code.bytes.len();
+        let before = self.diagnostics.len();
+        let made = self.new_object(simple, &type_args, args, type_args.is_empty(), span);
+        if made == JType::Error || self.diagnostics.len() > before {
+            return;
+        }
+        let bytes = &mut self.code.bytes;
+        if bytes.get(start) == Some(&op::NEW) && bytes.get(start + 3) == Some(&op::DUP) {
+            bytes[start] = op::ALOAD_0;
+            bytes[start + 1] = op::NOP;
+            bytes[start + 2] = op::NOP;
+            bytes[start + 3] = op::NOP;
+            // The one value `new_object` accounts for is not there.
+            self.code.drop_stack(1);
+        } else {
+            self.error(
+                span,
+                format!("this constructor of {simple} cannot be called from a subclass in caturra"),
+            );
+        }
+    }
+
     fn emit_constructor_call_on_this(&mut self, class_name: &str, args: &[Expr], span: SourceSpan) {
+        // `super(...)` into a builtin COLLECTION: the object already IS the
+        // collection (the VM made it so at `new`), and its constructor runs on
+        // it exactly as `new ArrayList<>(source)` runs on a fresh one.
+        if !self.table.has_class(class_name)
+            && let Some(simple) =
+                extendable_collection(class_name.strip_prefix("java/util/").unwrap_or(class_name))
+        {
+            self.collection_super_constructor(simple, args, span);
+            return;
+        }
         self.code.push_op(op::ALOAD_0, 1);
         if class_name == "java/lang/Object" {
             // `super(a, b)` in a class with no `extends` clause: the implicit
@@ -38228,6 +38517,16 @@ impl BodyGen<'_> {
         }
 
         let table = self.table;
+        // A class that extends a builtin COLLECTION has the collection's
+        // members too: anything it does not declare (or declares only with
+        // other parameters) is the collection's own, and the receiver on the
+        // stack already is that collection.
+        if let Some(face) = self.table.builtin_face(class_id)
+            && !self.program_declares(&class_name, method, &arg_types)
+            && face_answers(face, method, &arg_types, self.table)
+        {
+            return self.builtin_instance_call(face, method, args, span);
+        }
         let sig = match table.resolve(&class_name, method, &arg_types) {
             Resolution::Found(sig) => sig.clone(),
             Resolution::UnknownName => {
@@ -39646,6 +39945,18 @@ impl BodyGen<'_> {
             table.resolve(self.current_class, method, &arg_types)
         };
         let is_instance = matches!(&own, Resolution::Found(sig) if !sig.is_static);
+        // A bare member of the builtin collection this class extends:
+        // `get(size() - 1)` inside a `Deck extends ArrayList<Card>` is
+        // `this.get(this.size() - 1)`.
+        if !self.in_static
+            && !crate::is_lambda_class(self.current_class)
+            && let Some(face) = self.table.builtin_face(self.current_class_id)
+            && !self.program_declares(self.current_class, method, &arg_types)
+            && face_answers(face, method, &arg_types, self.table)
+        {
+            self.code.push_op(op::ALOAD_0, 1);
+            return self.builtin_instance_call(face, method, args, span);
+        }
         // A bare inherited-throwable method inside a user exception class
         // (`getMessage()` in a `toString()` override): the receiver path
         // already falls back to the exception method table for a throwable
@@ -43660,6 +43971,21 @@ impl BodyGen<'_> {
                         _ => JType::Error,
                     };
                 }
+                // An unqualified call in a class that extends a builtin
+                // collection: the collection's member, as `own_call` emits it.
+                if receiver.is_none()
+                    && !self.in_static
+                    && !crate::is_lambda_class(self.current_class)
+                    && let Some(face) = self.table.builtin_face(self.current_class_id)
+                {
+                    let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                    let class_name = self.current_class.to_owned();
+                    if !self.program_declares(&class_name, method, &arg_types)
+                        && face_answers(face, method, &arg_types, self.table)
+                    {
+                        return self.type_of_builtin_call(face, method, args);
+                    }
+                }
                 // Mirror emission-path resolution, silently.
                 let class = match receiver.as_deref() {
                     None => self.current_class.to_owned(),
@@ -43868,6 +44194,27 @@ impl BodyGen<'_> {
                         path[0].clone()
                     }
                     Some(other) => match self.type_of(other) {
+                        // The builtin collection a class extends answers what
+                        // the class does not — as `instance_call` emits it.
+                        JType::Object(id) | JType::Generic { class: id, .. }
+                            if let Some(face) = self.table.builtin_face(id)
+                                && let class_name = self.table.class_name(id).to_owned()
+                                && let arg_types =
+                                    args.iter().map(|a| self.type_of(a)).collect::<Vec<_>>()
+                                && !self.program_declares(&class_name, method, &arg_types)
+                                && face_answers(face, method, &arg_types, self.table) =>
+                        {
+                            let answer = self.type_of_builtin_call(face, method, args);
+                            // `Bag<String>`'s `get` is a String: the class's
+                            // variable, put back as `instance_call` does.
+                            return match self.type_of(other) {
+                                JType::Generic { arg, rest, .. } => {
+                                    let answer = self.substitute_type_var(answer, arg, rest);
+                                    substitute_member_type(answer, arg, rest, self.table)
+                                }
+                                _ => answer,
+                            };
+                        }
                         JType::Object(id) => self.table.class_name(id).to_owned(),
                         // `stream.collect(collector)` — the result comes from
                         // the COLLECTOR, exactly as `instance_call` reads it
@@ -44575,6 +44922,15 @@ impl BodyGen<'_> {
                     self.table.class_name(superclass).to_owned()
                 };
                 let arg_types: Vec<JType> = args.iter().map(|a| self.type_of(a)).collect();
+                // ...and the builtin collection's, as `super_method_call`
+                // emits it.
+                if owner.is_none()
+                    && let Some(face) = self.table.builtin_face(self.current_class_id)
+                    && !self.program_declares(&super_name, method, &arg_types)
+                    && face_answers(face, method, &arg_types, self.table)
+                {
+                    return self.type_of_builtin_call(face, method, args);
+                }
                 let table = self.table;
                 match table.resolve(&super_name, method, &arg_types) {
                     Resolution::Found(sig) => sig.ret.unwrap_or(JType::Error),
@@ -45139,6 +45495,26 @@ impl BodyGen<'_> {
                 self.expr(arg);
             }
             return None;
+        }
+        // `super.add(x)` where the method is the builtin COLLECTION's (no
+        // program class between here and it declares one): the collection's
+        // own code, NON-virtually — an `invokevirtual` would find this very
+        // override again.
+        if let Some(face) = self.table.builtin_face(self.current_class_id)
+            && !self.program_declares(&super_name, method, &arg_types)
+            && face_answers(face, method, &arg_types, self.table)
+        {
+            self.code.push_op(op::ALOAD_0, 1);
+            let before = self.code.last_virtual;
+            let start = self.code.bytes.len();
+            let answer = self.builtin_instance_call(face, method, args, span);
+            if let Some(at) = self.code.last_virtual
+                && self.code.last_virtual != before
+                && at >= start
+            {
+                self.code.bytes[at] = op::INVOKESPECIAL;
+            }
+            return answer;
         }
         let table = self.table;
         let sig = if let Resolution::Found(sig) = table.resolve(&super_name, method, &arg_types) {
@@ -49350,6 +49726,28 @@ impl BodyGen<'_> {
         span: SourceSpan,
         constant: Option<i64>,
     ) {
+        // A class that extends a builtin collection, assigned to a LIBRARY
+        // type: it is that collection, and converts as the collection does.
+        if let JType::Object(id) | JType::Generic { class: id, .. } = from
+            && !matches!(to, JType::TypeVar(_))
+            && !matches!(to, JType::Object(sup) | JType::Generic { class: sup, .. }
+                if self.table.is_subtype(id, sup))
+            && let Some(face) = self.table.builtin_face(id)
+        {
+            let before = self.diagnostics.len();
+            self.convert_for_assignment_const(face, to, span, constant);
+            // ...but a refusal names the CLASS, as javac's does: "Deck cannot
+            // be converted to List<String>".
+            let (collection, class) = (face.describe(self.table), from.describe(self.table));
+            for diagnostic in &mut self.diagnostics[before..] {
+                diagnostic.message = diagnostic.message.replacen(
+                    &format!("{collection} cannot"),
+                    &format!("{class} cannot"),
+                    1,
+                );
+            }
+            return;
+        }
         // Constant narrowing (JLS §5.2): a constant of type byte/short/char/int
         // whose value fits the target byte/short/char assigns without a cast
         // (`byte b = 5;`, `byte b = 'A';`, `char c = FINAL_INT;`). The value is
@@ -49561,6 +49959,9 @@ impl BodyGen<'_> {
             // An indexed list held as the `RandomAccess` it is.
             (JType::List { .. } | JType::Stack(_), JType::Object(id))
                 if self.table.class_id("RandomAccess") == Some(id) => {}
+            // A concrete collection class held as the `Cloneable` it is.
+            (from, JType::Object(id))
+                if self.table.class_id("Cloneable") == Some(id) && is_cloneable_collection(from) => {}
             // A String already satisfies a `Comparable`-bounded param — it is a
             // reference and implements Comparable (a boxed wrapper is boxed
             // above; a primitive is boxed by the autoboxing rule).
@@ -49960,11 +50361,16 @@ struct CodeBuilder {
     max_stack: u16,
     labels: Vec<Option<usize>>,
     patches: Vec<(usize, usize, Label)>,
+    /// Where the last `invokevirtual` was written — so a `super.m()` into a
+    /// builtin collection, compiled by the ordinary instance-call path, can
+    /// be made the NON-virtual call it is.
+    last_virtual: Option<usize>,
 }
 
 impl CodeBuilder {
     fn new() -> Self {
         Self {
+            last_virtual: None,
             bytes: Vec::new(),
             depth: 0,
             max_stack: 0,
@@ -50041,6 +50447,9 @@ impl CodeBuilder {
     }
 
     fn push_op_u16(&mut self, opcode: u8, operand: u16, pushes: u16) {
+        if opcode == op::INVOKEVIRTUAL {
+            self.last_virtual = Some(self.bytes.len());
+        }
         self.bytes.push(opcode);
         self.bytes.extend_from_slice(&operand.to_be_bytes());
         self.grow_stack(pushes);

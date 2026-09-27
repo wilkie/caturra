@@ -65,6 +65,7 @@ pub fn desugar_lambdas(
         })
         .collect();
     let hierarchy = class_hierarchy(units);
+    let faces = collection_faces(units, &supers);
     let enums = enum_names(units);
     let field_types: HashMap<(String, String), TypeRef> = units
         .iter()
@@ -218,6 +219,7 @@ pub fn desugar_lambdas(
                     bridges: &mut bridges,
                     shapes: &shapes,
                     supers: &supers,
+                    faces: &faces,
                     hierarchy: &hierarchy,
                     enums: &enums,
                     hoisted: &hoisted,
@@ -262,6 +264,7 @@ pub fn desugar_lambdas(
                     bridges: &mut bridges,
                     shapes: &shapes,
                     supers: &supers,
+                    faces: &faces,
                     hierarchy: &hierarchy,
                     enums: &enums,
                     hoisted: &hoisted,
@@ -301,6 +304,7 @@ pub fn desugar_lambdas(
                         bridges: &mut bridges,
                         shapes: &shapes,
                         supers: &supers,
+                        faces: &faces,
                         hierarchy: &hierarchy,
                         enums: &enums,
                         hoisted: &hoisted,
@@ -381,6 +385,9 @@ struct Ctx<'a> {
     shapes: &'a HashMap<String, Vec<MethodShape>>,
     /// Each class's DIRECT supertypes, for joining two element types.
     supers: &'a HashMap<String, Vec<String>>,
+    /// The builtin collection each class EXTENDS (itself or through a
+    /// program parent), as written: `Deck` → `ArrayList<Card>`.
+    faces: &'a HashMap<String, TypeRef>,
     /// Each class's type parameters and the ARGUMENTS it writes on its own
     /// supertypes, for reading a type variable a supertype owns off a
     /// subclass receiver (`class SBox implements Box<String>` answers `T`).
@@ -413,6 +420,189 @@ impl Ctx<'_> {
     fn lookup(&self, name: &str) -> Option<TypeRef> {
         self.scope.iter().rev().find_map(|f| f.get(name).cloned())
     }
+}
+
+/// The builtin collection each class extends — directly (`class Deck extends
+/// ArrayList<Card>`, an anonymous `new HashMap<String, Integer>() {{ … }}`) or
+/// through a program parent — as the source wrote it.
+fn collection_faces(
+    units: &[(String, CompilationUnit)],
+    supers: &HashMap<String, Vec<String>>,
+) -> HashMap<String, TypeRef> {
+    let mut direct: HashMap<String, TypeRef> = HashMap::new();
+    for class in units.iter().flat_map(|(_, unit)| unit.classes.iter()) {
+        let Some(parent) = class.superclass.as_deref() else {
+            continue;
+        };
+        if supers.contains_key(parent) {
+            continue;
+        }
+        let Some(simple) = crate::codegen::extendable_collection(parent) else {
+            continue;
+        };
+        let args = class
+            .supertype_args
+            .iter()
+            .find(|(name, _)| name == parent)
+            .map(|(_, args)| args.clone())
+            .unwrap_or_default();
+        direct.insert(
+            class.name.clone(),
+            if args.is_empty() {
+                TypeRef::Named(simple.to_owned())
+            } else {
+                TypeRef::Generic {
+                    base: simple.to_owned(),
+                    args,
+                }
+            },
+        );
+    }
+    let mut faces = HashMap::new();
+    for class in supers.keys() {
+        let mut current = class.clone();
+        for _ in 0..=supers.len() {
+            if let Some(face) = direct.get(&current) {
+                faces.insert(class.clone(), face.clone());
+                break;
+            }
+            match supers.get(&current).and_then(|parents| parents.first()) {
+                Some(parent) => current.clone_from(parent),
+                None => break,
+            }
+        }
+    }
+    faces
+}
+
+/// A value of a class that extends a builtin collection, handed on as an
+/// argument (or walked by a for-each), read through the upcast to that
+/// collection — which is all the LIBRARY sees it as. Left alone where a
+/// PROGRAM method or constructor of that name and arity takes the class
+/// itself (or a program ancestor) in that position, so its overloads still
+/// resolve against what was written.
+fn upcast_collection_value(
+    value: &mut Expr,
+    candidates: Option<&Vec<Vec<TypeRef>>>,
+    argc: usize,
+    at: usize,
+    ctx: &Ctx,
+) {
+    if matches!(
+        value,
+        Expr::Cast { .. } | Expr::Lambda { .. } | Expr::MethodRef { .. }
+    ) {
+        return;
+    }
+    let Some(class) = declared_class_name(value, ctx) else {
+        return;
+    };
+    let Some(face) = ctx
+        .faces
+        .get(&class)
+        .and_then(|face| concrete_face(&class, face, Some(value), ctx))
+    else {
+        return;
+    };
+    // The class and its program ancestors, up to the collection.
+    let mut chain = vec![class.clone()];
+    let mut current = class;
+    while let Some(parent) = ctx.supers.get(&current).and_then(|parents| parents.first()) {
+        if chain.contains(parent) || !ctx.supers.contains_key(parent) {
+            break;
+        }
+        chain.push(parent.clone());
+        current.clone_from(parent);
+    }
+    let names_the_class = candidates.is_some_and(|lists| {
+        lists.iter().any(|params| {
+            params.len() == argc
+                && matches!(params.get(at), Some(TypeRef::Named(name) | TypeRef::Generic { base: name, .. }) if chain.contains(name))
+        })
+    });
+    if names_the_class {
+        return;
+    }
+    let span = value.span();
+    let operand = std::mem::replace(value, Expr::This { span });
+    *value = Expr::Cast {
+        ty: face.clone(),
+        operand: Box::new(operand),
+        span,
+    };
+}
+
+/// The collection type a call's receiver should be read as: the receiver is
+/// an instance of a class that extends a builtin collection, and the member
+/// called is the COLLECTION's, not one the program declares. Rewriting the
+/// receiver to that upcast lets every reader below — and codegen — see an
+/// ordinary collection.
+fn face_receiver(receiver: Option<&Expr>, method: &str, argc: usize, ctx: &Ctx) -> Option<TypeRef> {
+    let class = match receiver {
+        None | Some(Expr::This { .. }) => ctx.current_class?.to_owned(),
+        Some(owner) => declared_class_name(owner, ctx)?,
+    };
+    let face = ctx.faces.get(&class)?;
+    if declared_shape(&class, method, argc, ctx).is_some() {
+        return None;
+    }
+    let (TypeRef::Named(base) | TypeRef::Generic { base, .. }) = face else {
+        return None;
+    };
+    if !crate::codegen::collection_has_method(base, method) {
+        return None;
+    }
+    concrete_face(&class, face, receiver, ctx)
+}
+
+/// A face with the class's own type VARIABLES replaced by what the receiver
+/// was declared with: a `Bag<String>` whose class `extends ArrayList<T>` is an
+/// `ArrayList<String>`. `None` when a variable has nothing to take — codegen
+/// then answers the call without the pass's help.
+fn concrete_face(
+    class: &str,
+    face: &TypeRef,
+    receiver: Option<&Expr>,
+    ctx: &Ctx,
+) -> Option<TypeRef> {
+    let TypeRef::Generic { base, args } = face else {
+        return Some(face.clone());
+    };
+    let params: Vec<String> = ctx
+        .hierarchy
+        .get(class)
+        .map(|generics| generics.params.clone())
+        .unwrap_or_default();
+    let is_variable = |ty: &TypeRef| {
+        matches!(ty, TypeRef::Named(name)
+            if params.contains(name) || crate::parser::typevar_index(name).is_some()
+                || (!ctx.class_names.contains(name) && name.len() == 1))
+    };
+    if !args.iter().any(is_variable) {
+        return Some(face.clone());
+    }
+    let written = match receiver.and_then(|owner| declared_type_of(owner, ctx)) {
+        Some(TypeRef::Generic {
+            base: declared,
+            args: written,
+        }) if declared == class && written.len() == params.len() => written,
+        _ => return None,
+    };
+    let mut out = Vec::with_capacity(args.len());
+    for arg in args {
+        match arg {
+            TypeRef::Named(name) if params.contains(name) => {
+                let at = params.iter().position(|p| p == name)?;
+                out.push(written.get(at)?.clone());
+            }
+            other if is_variable(other) => return None,
+            other => out.push(other.clone()),
+        }
+    }
+    Some(TypeRef::Generic {
+        base: base.clone(),
+        args: out,
+    })
 }
 
 /// An abstract interface method whose signature matches a PUBLIC method of
@@ -2612,6 +2802,9 @@ fn desugar_stmt(stmt: &mut Stmt, ctx: &mut Ctx) {
             body,
             ..
         } => {
+            if !ctx.faces.is_empty() {
+                upcast_collection_value(iterable, None, 0, 0, ctx);
+            }
             desugar_expr(iterable, None, ctx);
             ctx.scope.push(HashMap::new());
             if let Some(frame) = ctx.scope.last_mut() {
@@ -3082,6 +3275,37 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             type_args,
             span,
         } => {
+            // A call on a class that extends a builtin collection, for a
+            // member the collection declares: read through the upcast.
+            if let Some(face) = face_receiver(receiver.as_deref(), method, args.len(), ctx) {
+                let operand = receiver.take().map_or(Expr::This { span: *span }, |r| *r);
+                *receiver = Some(Box::new(Expr::Cast {
+                    ty: face,
+                    operand: Box::new(operand),
+                    span: *span,
+                }));
+            }
+            // ...and one handed to `Collections` where it takes a
+            // COLLECTION (not where it takes an element: `singletonList(deck)`
+            // is a list OF decks).
+            if !ctx.faces.is_empty()
+                && matches!(receiver.as_deref(), Some(Expr::Name { path, .. })
+                    if path.len() == 1 && path[0] == "Collections" && ctx.lookup("Collections").is_none())
+            {
+                let positions: &[usize] = match method.as_str() {
+                    "singleton" | "singletonList" | "singletonMap" | "nCopies" | "list"
+                    | "reverseOrder" => &[],
+                    "copy" | "disjoint" | "indexOfSubList" | "lastIndexOfSubList" => &[0, 1],
+                    _ => &[0],
+                };
+                let candidates = ctx.methods.get(method.as_str());
+                let argc = args.len();
+                for (at, arg) in args.iter_mut().enumerate() {
+                    if positions.contains(&at) {
+                        upcast_collection_value(arg, candidates, argc, at, ctx);
+                    }
+                }
+            }
             // A comparator FACTORY or COMBINATOR: the whole chain shares one
             // element type, and the generic receiver walk below would throw
             // away the target type that carries it.
@@ -4213,6 +4437,21 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             args,
             ..
         } => {
+            // A collection's COPY constructor (`new ArrayList<>(deck)`) takes
+            // the value as the collection it is.
+            if !ctx.faces.is_empty()
+                && !ctx.declared_classes.contains(class)
+                && (crate::codegen::extendable_collection(simple_base(class)).is_some()
+                    || matches!(
+                        simple_base(class),
+                        "Vector" | "Hashtable" | "ConcurrentHashMap" | "EnumMap"
+                    ))
+            {
+                let argc = args.len();
+                for (at, arg) in args.iter_mut().enumerate() {
+                    upcast_collection_value(arg, None, argc, at, ctx);
+                }
+            }
             // A HOISTED body (an anonymous class, a local class) is walked as
             // a class of its own, long after this expression. What is in scope
             // HERE is what it was written inside, so record it for that walk.

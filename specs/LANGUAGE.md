@@ -1404,7 +1404,7 @@ declared in a file named Bar.java`, javac's wording exactly, for classes,
     `unknown type ' Wildcard ='`, and extending a builtin collection
     (`new ArrayList<>() { … }`) claimed the class did not exist rather than
     saying caturra's collections are VM objects with no class to inherit
-    from.
+    from. (Since lifted: see **Extending a builtin collection**.)
   - Deferred: a generic type with TWO type parameters substitutes neither
     (`JType::Generic` carries one argument); inference from the assignment
     TARGET (`List<String> l = box("hi")`); a lambda whose target is a generic
@@ -9145,12 +9145,6 @@ counting catches: a divergence that stopped being one.
   Locale.FRANCE)`. caturra ships one text, en-US, and answering a French
   program in English would be a WRONG answer rather than a missing one — so the
   locale is checked where it is written. (`stricter_a_locale_that_is_not_english`)
-- A class that EXTENDS a builtin collection — `class Counts extends
-  HashMap<String, Integer>`. caturra's collections are the VM's own objects,
-  not classes compiled from source, so there is nothing to inherit from; the
-  refusal says exactly that rather than pretending the name is unknown. Every
-  other way of holding one (a field, a wrapper, composition) works.
-  (`stricter_extending_a_builtin_collection`)
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
   `.reversed()` freezes that before the target type can correct it, so javac
@@ -12562,6 +12556,88 @@ Pinned by `an_inner_class_in_a_static_context`,
 `an_inner_class_from_another_class`, `reject_a_double_switch_selector`,
 `reject_an_object_switch_selector`, `reject_a_break_outside_a_loop`,
 `reject_a_continue_outside_a_loop` and `the_switches_a_lesson_writes`.
+
+### Extending a builtin collection (2026-09-27)
+
+`class Deck extends ArrayList<Card>`, `class Counts extends HashMap<String,
+Integer>`, and the anonymous "double brace" `new HashMap<String, Integer>() {{
+put("a", 1); }}` were refused: caturra's collections are the VM's own objects,
+not classes compiled from source, so there was no class to inherit from. It
+was the last stricter-than-javac entry about collections, and it is ordinary
+Java — a textbook `Deck`, a word counter, a queue with a name.
+
+**The object IS the collection.** `new Deck()` allocates the builtin
+collection itself, and the program class — its name and its own fields, laid
+out as an instance's are — rides in a side table on the heap
+(`Heap::extension`, beside the `view_class` a `Vector` already used to share a
+`Stack`'s storage). So every library path sees an ordinary list: printing,
+`Collections.sort(deck)`, `new ArrayList<>(deck)`, a for-each, `equals` and
+`hashCode`, a fail-fast cursor. What makes it a `Deck` is read where only the
+class can answer: `getfield`/`putfield` (a field write does not go through
+`get_mut`, so it is not a structural change to the collection),
+`getClass`, `instanceof`/`checkcast` (the class's own chain, then everything
+the collection answers to), and dispatch. The collector marks the fields of a
+live extended object and prunes the entry of a dead one.
+
+The extendable classes: `ArrayList`, `LinkedList`, `Stack`, `ArrayDeque`,
+`PriorityQueue`, `HashSet`, `LinkedHashSet`, `TreeSet`, `HashMap`,
+`LinkedHashMap`, `TreeMap`. `StringBuilder`, `StringBuffer` and `Scanner` are
+FINAL in the JDK, and the refusal now says javac's `cannot inherit from final
+StringBuilder` instead of blaming caturra.
+
+**The compiler.** A class records the collection it extends as WRITTEN
+(`ClassInfo::builtin_face`), resolved to the collection type on demand — its
+own type variables as variables, so a `Bag<String>` whose class `extends
+ArrayList<T>` answers `get` with a `String`. A member the program does not
+declare (or declares only with other parameters) is the collection's: a
+qualified call, an unqualified one inside the class, `super.m()` (made
+NON-virtual, `invokespecial`, so an override that calls `super.add` does not
+find itself again), and the typing mirror of each. The class widens to what
+the collection widens to (`List<Card>`, `Collection<Card>`, `Iterable<Card>`,
+`RandomAccess`, `Cloneable`), and a refusal names the class, as javac's does:
+`Deck cannot be converted to List<String>`. A library parameter that takes a
+collection accepts one (`list.addAll(deck)`). `super(args)` runs the
+collection's constructor on `this` — chosen and checked by the same code that
+compiles `new ArrayList<Card>(args)`, whose `new`/`dup` become `aload_0`/`nop`.
+`@Override` must still name something: one of the collection's members, or one
+of the two protected hooks no table lists (`removeRange`, `removeEldestEntry`).
+
+**The lambda pass** works on source types, and teaching each of its readers
+about subclasses would have been one fix per reader. Instead, a call on such a
+receiver for a member the collection declares is rewritten to the UPCAST —
+`merge(k, 1, Integer::sum)` inside a `Counts` becomes `((HashMap<String,
+Integer>) this).merge(...)` — so every reader after it, and codegen, sees an
+ordinary collection. The same upcast is applied where a LIBRARY position takes
+a collection (`Collections.reverse(deck)`, a copy constructor, a for-each) —
+and only there: `list.add(deck)` adds a `Deck` as an ELEMENT.
+
+**Dispatch.** A call on an extended object looks for the program's method
+first — by exact descriptor, or, when it arrives through the collection's
+interface with the ERASED descriptor (`add(Ljava/lang/Object;)Z` against the
+program's `add(LCard;)Z`), by name and parameter kinds, which is the bridge
+javac would have written. Anything else is the collection's own code. Library
+code that a JDK routes through an overridable method does so here where it is
+observable: `Collections.addAll(deck, a, b)` calls the override of `add` per
+element (`deck.addAll(list)` does not, on a JDK either), and a nested
+rendering (`[deck]`, `{k=deck}`) prints the override of `toString` — while
+`super.toString()` inside that override renders the collection itself.
+`clone()` answers an instance of the program class with its fields copied.
+
+Not modelled: access-ordered `LinkedHashMap` (`super(16, 0.75f, true)`) and
+the `removeEldestEntry` hook, so the LRU-cache idiom is still refused; the
+two-argument `HashMap(capacity, loadFactor)` constructor; an override of
+`iterator()` does not change how the library walks the collection; a program
+`equals`/`hashCode` on an extended object is not what a hashed collection
+asks.
+
+Pinned by `a_class_that_extends_a_collection`,
+`a_collection_subclass_overrides_and_calls_super`,
+`a_collection_subclass_with_lambdas_and_generics`,
+`every_extendable_collection`, `a_collection_subclass_clones_as_itself`,
+`a_collection_subclass_is_not_any_list`,
+`a_collection_subclass_takes_only_its_element`,
+`an_override_of_nothing_in_a_collection_subclass` and
+`a_final_library_class_cannot_be_extended`.
 
 ### System properties, one key at a time (2026-09-27)
 
