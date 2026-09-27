@@ -104,7 +104,12 @@ pub trait ConsoleIo {
     /// answer, [`UiPoll::Closed`] a dismissal (`null`), [`UiPoll::TimedOut`]
     /// no answer yet. The default cannot wait on time: it waits as
     /// [`ConsoleIo::ui_dialog`] does.
-    fn ui_poll_dialog(&mut self, kind: &str, message: &str, _timeout_millis: Option<u32>) -> UiPoll {
+    fn ui_poll_dialog(
+        &mut self,
+        kind: &str,
+        message: &str,
+        _timeout_millis: Option<u32>,
+    ) -> UiPoll {
         match self.ui_dialog(kind, message) {
             Some(answer) => UiPoll::Event(answer),
             None => UiPoll::Closed,

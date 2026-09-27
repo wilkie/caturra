@@ -375,8 +375,9 @@ impl<'run> Interpreter<'run> {
         loop {
             let now = self.console.now_millis();
             let current = self.threads.current;
-            let chosen =
-                (1..=count).map(|offset| (current + offset) % count).find(|&index| {
+            let chosen = (1..=count)
+                .map(|offset| (current + offset) % count)
+                .find(|&index| {
                     !self.threads.list[index].frames.is_empty() && self.threads.try_wake(index, now)
                 });
             if let Some(next) = chosen {
@@ -433,8 +434,9 @@ impl<'run> Interpreter<'run> {
     /// The run ends with every thread parked and none waiting on time.
     fn deadlock_report(&self) -> String {
         use std::fmt::Write as _;
-        let mut report =
-            String::from("caturra: every thread is blocked and none is waiting on time (on a JDK, the program would hang here)");
+        let mut report = String::from(
+            "caturra: every thread is blocked and none is waiting on time (on a JDK, the program would hang here)",
+        );
         for (index, thread) in self.threads.list.iter().enumerate() {
             let what = match thread.park {
                 Park::Joining { target, .. } => {
@@ -526,7 +528,11 @@ impl<'run> Interpreter<'run> {
     ) -> Result<Option<Flow<'run>>, VmError> {
         let current = self.threads.current;
         let peek = |frame: &Frame<'run>, depth: usize| -> Option<JValue> {
-            frame.stack.len().checked_sub(depth + 1).map(|at| frame.stack[at])
+            frame
+                .stack
+                .len()
+                .checked_sub(depth + 1)
+                .map(|at| frame.stack[at])
         };
         let flow = match method {
             "__sleep" => {
@@ -577,9 +583,13 @@ impl<'run> Interpreter<'run> {
                             let name = self.thread_name(target);
                             return Err(self.nested_wait_refusal(&format!("wait for \"{name}\"")));
                         }
-                        let until = (millis > 0)
-                            .then(|| self.console.now_millis().saturating_add(millis));
-                        return Ok(Some(self.park(frame, addr, Park::Joining { target, until })));
+                        let until =
+                            (millis > 0).then(|| self.console.now_millis().saturating_add(millis));
+                        return Ok(Some(self.park(
+                            frame,
+                            addr,
+                            Park::Joining { target, until },
+                        )));
                     }
                 };
                 Self::drop_args(frame, 2)?;
@@ -605,9 +615,8 @@ impl<'run> Interpreter<'run> {
                     Some(_) => {
                         if !self.may_switch() {
                             let label = self.monitor_label(monitor);
-                            return Err(
-                                self.nested_wait_refusal(&format!("wait for the monitor of {label}"))
-                            );
+                            return Err(self
+                                .nested_wait_refusal(&format!("wait for the monitor of {label}")));
                         }
                         return Ok(Some(self.park(frame, addr, Park::Blocked { monitor })));
                     }
@@ -903,7 +912,11 @@ impl<'run> Interpreter<'run> {
             if !owns {
                 return Err(illegal_monitor_state());
             }
-            let entry = self.threads.monitors.get_mut(&monitor).ok_or_else(illegal_monitor_state)?;
+            let entry = self
+                .threads
+                .monitors
+                .get_mut(&monitor)
+                .ok_or_else(illegal_monitor_state)?;
             let chosen: Vec<usize> = if method == "notify" {
                 entry.waiters.pop_front().into_iter().collect()
             } else {
@@ -972,7 +985,11 @@ impl<'run> Interpreter<'run> {
             let label = self.monitor_label(monitor);
             return fail(frame, self.nested_wait_refusal(&format!("wait on {label}")));
         }
-        let entry = self.threads.monitors.get_mut(&monitor).ok_or_else(illegal_monitor_state)?;
+        let entry = self
+            .threads
+            .monitors
+            .get_mut(&monitor)
+            .ok_or_else(illegal_monitor_state)?;
         let count = entry.count;
         entry.owner = None;
         entry.count = 0;

@@ -1550,7 +1550,10 @@ fn ends_abruptly(stmt: &Stmt) -> bool {
 /// method of a class of the program.
 fn call_is_void(expr: &Expr, ctx: &Ctx) -> Option<bool> {
     let Expr::Call {
-        receiver, method, args, ..
+        receiver,
+        method,
+        args,
+        ..
     } = expr
     else {
         return None;
@@ -1558,7 +1561,10 @@ fn call_is_void(expr: &Expr, ctx: &Ctx) -> Option<bool> {
     if let Some(receiver) = receiver.as_deref()
         && is_standard_stream(receiver)
     {
-        return Some(matches!(method.as_str(), "print" | "println" | "write" | "flush" | "close"));
+        return Some(matches!(
+            method.as_str(),
+            "print" | "println" | "write" | "flush" | "close"
+        ));
     }
     let class = match receiver.as_deref() {
         None => ctx.current_class.map(str::to_owned),
@@ -7435,10 +7441,7 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
 /// The KEY (0) or VALUE (1) of a written map type.
 fn map_half(receiver: &TypeRef, at: usize) -> Option<TypeRef> {
     match receiver {
-        TypeRef::Generic { base, args }
-            if args.len() == 2
-                && is_map_class(simple_base(base)) =>
-        {
+        TypeRef::Generic { base, args } if args.len() == 2 && is_map_class(simple_base(base)) => {
             args.get(at).cloned()
         }
         _ => None,

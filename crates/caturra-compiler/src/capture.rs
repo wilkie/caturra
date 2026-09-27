@@ -193,7 +193,6 @@ pub fn resolve_captures(
                     *next += 1;
                     class.binary_name = Some(format!("{outer}${next}"));
                 }
-
             }
         }
     }
@@ -207,7 +206,10 @@ pub fn resolve_captures(
         .iter()
         .flat_map(|(_, unit)| unit.classes.iter())
         .map(|class| {
-            let binary = class.binary_name.clone().unwrap_or_else(|| class.name.clone());
+            let binary = class
+                .binary_name
+                .clone()
+                .unwrap_or_else(|| class.name.clone());
             (class.name.clone(), binary)
         })
         .collect();
@@ -223,7 +225,9 @@ pub fn resolve_captures(
             let outer = binary_names.get(owner).unwrap_or(owner);
             let simple = crate::codegen::strip_local_suffix(&class.name);
             let simple = simple.rsplit('$').next().unwrap_or(simple).to_owned();
-            let next = per_local.entry((outer.clone(), simple.clone())).or_insert(0);
+            let next = per_local
+                .entry((outer.clone(), simple.clone()))
+                .or_insert(0);
             *next += 1;
             class.binary_name = Some(format!("{outer}${next}{simple}"));
         }

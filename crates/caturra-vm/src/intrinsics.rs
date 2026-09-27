@@ -9117,7 +9117,11 @@ fn scanner_pattern_read(
                 groups,
             }))));
             last_end = found.end;
-            from = if found.end == found.start { found.end + 1 } else { found.end };
+            from = if found.end == found.start {
+                found.end + 1
+            } else {
+                found.end
+            };
         }
         // The scanner is left past the last match, as a JDK's is.
         scanner_set_pos(heap, receiver, pos + byte_at[last_end]);
@@ -10156,13 +10160,15 @@ fn chm_iterator_method(
     };
     match method {
         "hasNext" => Ok(Some(JValue::Int(i32::from(
-            heap.chm_cursor(key).is_some_and(|cursor| cursor.next.is_some()),
+            heap.chm_cursor(key)
+                .is_some_and(|cursor| cursor.next.is_some()),
         )))),
         "next" => {
             let Some((map, id)) = heap.chm_cursor_advance(key) else {
                 return Err(throw("java.util.NoSuchElementException"));
             };
-            let Some(HeapObject::HashMap(table) | HeapObject::HashSet(table)) = heap.get(map) else {
+            let Some(HeapObject::HashMap(table) | HeapObject::HashSet(table)) = heap.get(map)
+            else {
                 return Ok(Some(JValue::NULL));
             };
             let Some((node_key, value)) = table.chm_node(id) else {

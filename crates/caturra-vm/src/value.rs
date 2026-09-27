@@ -1950,7 +1950,10 @@ impl Heap {
     /// A fresh for-each token, its cursor started over `map`.
     pub fn chm_loop_token(&mut self, map: HeapRef) -> i32 {
         let token = self.next_chm_token;
-        self.next_chm_token = self.next_chm_token.checked_add(1).unwrap_or(FIRST_CHM_TOKEN);
+        self.next_chm_token = self
+            .next_chm_token
+            .checked_add(1)
+            .unwrap_or(FIRST_CHM_TOKEN);
         self.chm_cursor_start(chm_token_key(token), map);
         token
     }

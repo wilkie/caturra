@@ -2477,7 +2477,8 @@ impl<'run> Interpreter<'run> {
                                 class.constant_pool.get_member_ref(index)
                                 && matches!(name, "wait" | "notify" | "notifyAll")
                             {
-                                return self.object_monitor_call(&mut frame, addr, name, descriptor);
+                                return self
+                                    .object_monitor_call(&mut frame, addr, name, descriptor);
                             }
                             if let Some(callee) =
                                 self.invoke_virtual_op(class, &mut frame, index, &malformed)?
@@ -2513,7 +2514,8 @@ impl<'run> Interpreter<'run> {
                             // leaves them for its re-execution.
                             if target_class == "java/lang/System"
                                 && method_name.starts_with("__")
-                                && let Some(flow) = self.scheduler_call(&mut frame, addr, method_name)?
+                                && let Some(flow) =
+                                    self.scheduler_call(&mut frame, addr, method_name)?
                             {
                                 return Ok(flow);
                             }
@@ -9377,7 +9379,9 @@ impl<'run> Interpreter<'run> {
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(receiver)).unwrap_or(i32::MAX)),
             // A `ConcurrentHashMap`'s size as a long.
-            ("mappingCount", []) => JValue::Long(i64::try_from(self.map_len(receiver)).unwrap_or(0)),
+            ("mappingCount", []) => {
+                JValue::Long(i64::try_from(self.map_len(receiver)).unwrap_or(0))
+            }
             ("isEmpty", []) => JValue::Int(i32::from(self.map_len(receiver) == 0)),
             ("clear", []) => {
                 match self.heap.get_mut(receiver) {
@@ -11718,7 +11722,15 @@ impl<'run> Interpreter<'run> {
         let natural_tree = |tree: HeapRef| {
             matches!(
                 self.heap.get(tree),
-                Some(H::TreeSet { comparator: None, .. } | H::TreeMap { comparator: None, .. })
+                Some(
+                    H::TreeSet {
+                        comparator: None,
+                        ..
+                    } | H::TreeMap {
+                        comparator: None,
+                        ..
+                    }
+                )
             ) && self.heap.view_class_of(tree) != Some("java/util/RegularEnumSet")
         };
         let source = self.heap.unwrapped(origin.source);
@@ -13572,7 +13584,9 @@ impl<'run> Interpreter<'run> {
                     self.heap
                         .alloc(crate::value::HeapObject::Stream { source, ops }),
                 ));
-                return Ok(Answered::Value(self.inherit_stream_origin(receiver, derived)));
+                return Ok(Answered::Value(
+                    self.inherit_stream_origin(receiver, derived),
+                ));
             }
             ("sorted", []) => {
                 return Ok(Answered::Value(
@@ -17369,7 +17383,10 @@ impl<'run> Interpreter<'run> {
                     if crate::value::is_chm_token(*token) =>
                 {
                     let key = crate::value::chm_token_key(*token);
-                    let more = self.heap.chm_cursor(key).is_some_and(|cursor| cursor.next.is_some());
+                    let more = self
+                        .heap
+                        .chm_cursor(key)
+                        .is_some_and(|cursor| cursor.next.is_some());
                     if !more {
                         self.heap.chm_cursor_end(key);
                     }
@@ -19101,13 +19118,13 @@ impl<'run> Interpreter<'run> {
         match kind {
             MapViewKind::Keys => key,
             MapViewKind::Values => value,
-            MapViewKind::Entries => JValue::Ref(Some(self.heap.alloc(
-                crate::value::HeapObject::MapEntry {
+            MapViewKind::Entries => {
+                JValue::Ref(Some(self.heap.alloc(crate::value::HeapObject::MapEntry {
                     map,
                     key,
                     read_only: false,
-                },
-            ))),
+                })))
+            }
         }
     }
 
@@ -21510,7 +21527,9 @@ fn library_frame_lines(class: &str, method: &str) -> &'static [&'static str] {
         ("__InvocationEvent", "run") => {
             &["java.desktop/java.awt.event.InvocationEvent.dispatch(InvocationEvent.java:313)"]
         }
-        ("__TimerTick", "run") => &["java.desktop/javax.swing.Timer$DoPostEvent.run(Timer.java:249)"],
+        ("__TimerTick", "run") => {
+            &["java.desktop/javax.swing.Timer$DoPostEvent.run(Timer.java:249)"]
+        }
         ("Timer", "__fire") => {
             &["java.desktop/javax.swing.Timer.fireActionPerformed(Timer.java:317)"]
         }
@@ -23319,7 +23338,10 @@ fn library_superclass(internal: &str) -> Option<&'static str> {
         // A `Hashtable` extends the abstract `Dictionary` a `Map` replaced —
         // the one place that class is still visible.
         ("java/util/Hashtable", "java/util/Dictionary"),
-        ("java/util/concurrent/ConcurrentHashMap", "java/util/AbstractMap"),
+        (
+            "java/util/concurrent/ConcurrentHashMap",
+            "java/util/AbstractMap",
+        ),
         // A `FileReader` extends `InputStreamReader`, not `Reader` — the one
         // place that class shows in an ordinary program.
         ("java/io/FileReader", "java/io/InputStreamReader"),

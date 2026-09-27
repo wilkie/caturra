@@ -1003,7 +1003,10 @@ impl Parser<'_> {
             .collect();
         if !written.is_empty() {
             let at = self.here();
-            self.error_at(at, format!("modifier {} not allowed here", written.join(",")));
+            self.error_at(
+                at,
+                format!("modifier {} not allowed here", written.join(",")),
+            );
         }
         self.type_after_modifiers(
             start,
@@ -1421,7 +1424,9 @@ impl Parser<'_> {
                     modifiers.is_final = true;
                     self.pos += 1;
                 }
-                Some(TokenKind::Keyword(keyword @ (Keyword::Static | Keyword::Private | Keyword::Protected))) => {
+                Some(TokenKind::Keyword(
+                    keyword @ (Keyword::Static | Keyword::Private | Keyword::Protected),
+                )) => {
                     let at = match keyword {
                         Keyword::Static => 0,
                         Keyword::Private => 1,
@@ -2738,15 +2743,22 @@ impl Parser<'_> {
                 if self.at_local_class_start() {
                     match self.local_class_decl() {
                         Ok((name, decl)) => {
-                            if locals.iter().any(|(arm, _, _, seen, _)| {
-                                *arm == arms.len() && *seen == name
-                            }) {
+                            if locals
+                                .iter()
+                                .any(|(arm, _, _, seen, _)| *arm == arms.len() && *seen == name)
+                            {
                                 self.error_at(
                                     decl.span,
                                     format!("class {name} is already defined in this block"),
                                 );
                             }
-                            locals.push((arms.len(), body.len(), self.anon_classes.len(), name, decl));
+                            locals.push((
+                                arms.len(),
+                                body.len(),
+                                self.anon_classes.len(),
+                                name,
+                                decl,
+                            ));
                         }
                         Err(Abort) => self.recover_to_statement_boundary(),
                     }
@@ -5847,7 +5859,8 @@ fn variable_sources(method: &MethodDecl, var: &str) -> Vec<crate::ast::InferSour
                 // Read as an element, `run(() -> "x", s -> s.length())` left
                 // `T` unpinned and the second lambda's parameter was `Object`.
                 [TypeRef::Named(name)]
-                    if name == var && crate::ast::functional_result_position(base, 1) == Some(0) =>
+                    if name == var
+                        && crate::ast::functional_result_position(base, 1) == Some(0) =>
                 {
                     Some(InferSource::LambdaResult(index))
                 }
@@ -5965,7 +5978,8 @@ fn infer_return_plan(
             // the container, and guessing would be worse than erasing.
             TypeRef::Generic { base, args } => match args.as_slice() {
                 [TypeRef::Named(name)]
-                    if name == ret_var && crate::ast::functional_result_position(base, 1).is_none() =>
+                    if name == ret_var
+                        && crate::ast::functional_result_position(base, 1).is_none() =>
                 {
                     Some(InferSource::Element(index))
                 }
@@ -6950,7 +6964,11 @@ mod tests {
             panic!("synchronized lowers to a block: {body:?}");
         };
         assert_eq!(inner.len(), 4, "lock, null check, enter, try: {inner:?}");
-        let Stmt::Try { finally_body: Some(release), .. } = &inner[3] else {
+        let Stmt::Try {
+            finally_body: Some(release),
+            ..
+        } = &inner[3]
+        else {
             panic!("the body is guarded by a finally: {inner:?}");
         };
         assert_eq!(release.len(), 1, "the finally releases the monitor");

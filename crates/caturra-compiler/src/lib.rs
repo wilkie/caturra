@@ -122,7 +122,9 @@ fn jdk_binary_name(simple: &str) -> Option<&'static str> {
         "__Worker" => Some("java/util/concurrent/ThreadPoolExecutor$Worker"),
         "ThreadPoolExecutor" => Some("java/util/concurrent/ThreadPoolExecutor"),
         "__SignallingTask" => Some("java/util/concurrent/ExecutorCompletionService$QueueingFuture"),
-        "__DelegatedExecutorService" => Some("java/util/concurrent/Executors$DelegatedExecutorService"),
+        "__DelegatedExecutorService" => {
+            Some("java/util/concurrent/Executors$DelegatedExecutorService")
+        }
         "__FinalizableDelegatedExecutorService" => {
             Some("java/util/concurrent/Executors$FinalizableDelegatedExecutorService")
         }
@@ -131,7 +133,9 @@ fn jdk_binary_name(simple: &str) -> Option<&'static str> {
         "Lock" => Some("java/util/concurrent/locks/Lock"),
         "Condition" => Some("java/util/concurrent/locks/Condition"),
         "ReentrantLock" => Some("java/util/concurrent/locks/ReentrantLock"),
-        "__ConditionObject" => Some("java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject"),
+        "__ConditionObject" => {
+            Some("java/util/concurrent/locks/AbstractQueuedSynchronizer$ConditionObject")
+        }
         "AtomicInteger" => Some("java/util/concurrent/atomic/AtomicInteger"),
         "AtomicLong" => Some("java/util/concurrent/atomic/AtomicLong"),
         "AtomicBoolean" => Some("java/util/concurrent/atomic/AtomicBoolean"),
@@ -569,7 +573,10 @@ fn number_defaults(units: &mut [(String, ast::CompilationUnit)]) {
         return;
     }
     let extends_number = |class: &ast::ClassDecl| {
-        matches!(class.superclass.as_deref(), Some("Number" | "java.lang.Number"))
+        matches!(
+            class.superclass.as_deref(),
+            Some("Number" | "java.lang.Number")
+        )
     };
     if !units
         .iter()
@@ -588,7 +595,11 @@ fn number_defaults(units: &mut [(String, ast::CompilationUnit)]) {
         return;
     };
     for (_, unit) in units.iter_mut() {
-        for class in unit.classes.iter_mut().filter(|class| extends_number(class)) {
+        for class in unit
+            .classes
+            .iter_mut()
+            .filter(|class| extends_number(class))
+        {
             for method in &defaults.methods {
                 if !class
                     .methods
@@ -833,7 +844,9 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
     // `java.util.concurrent` — every class of it needs an import (or its
     // qualified name), so the package's name in the text is the trigger. It is
     // written over `Thread`, which comes with it.
-    if sources.iter().any(|s| s.text.contains("java.util.concurrent"))
+    if sources
+        .iter()
+        .any(|s| s.text.contains("java.util.concurrent"))
         && !units
             .iter()
             .any(|(_, unit)| unit.classes.iter().any(|c| c.name == "ExecutorService"))

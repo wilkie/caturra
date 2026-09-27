@@ -8198,7 +8198,11 @@ fn face_join(left: JType, right: JType) -> Option<JType> {
     };
     match (left, right) {
         (
-            JType::Map { key, value, face: a },
+            JType::Map {
+                key,
+                value,
+                face: a,
+            },
             JType::Map {
                 key: k2,
                 value: v2,
@@ -11905,7 +11909,10 @@ fn emit_method(
     {
         // Under the body's CLOSING brace, where javac puts it — the point the
         // method can fall off.
-        body.error(decl.body_end.unwrap_or(decl.span), "missing return statement");
+        body.error(
+            decl.body_end.unwrap_or(decl.span),
+            "missing return statement",
+        );
     }
     body.code.push_op(op::RETURN, 0);
 
@@ -13421,8 +13428,7 @@ const NO_SCHEDULER: &str = "caturra does not model java.util.concurrent.Schedule
 
 /// What stands in for a program's own uncaught-exception handler: the
 /// default one, which prints the trace, is what runs.
-const NO_HANDLERS: &str =
-    "caturra does not model uncaught-exception handlers yet; the default one runs \
+const NO_HANDLERS: &str = "caturra does not model uncaught-exception handlers yet; the default one runs \
      (it prints \"Exception in thread ...\" and the trace, and the thread ends)";
 
 /// Real Java 11 members caturra cannot model, per class, with the honest
@@ -14284,7 +14290,10 @@ fn receiver_class_name(receiver: JType) -> &'static str {
 /// `notify()`, `notifyAll()`. Every one is final, so on ANY reference these
 /// names at these arities mean `Object`'s, whatever the receiver's class.
 fn is_monitor_call(method: &str, argc: usize) -> bool {
-    matches!((method, argc), ("notify" | "notifyAll", 0) | ("wait", 0..=2))
+    matches!(
+        (method, argc),
+        ("notify" | "notifyAll", 0) | ("wait", 0..=2)
+    )
 }
 
 /// The honest not-supported reason for a class member, if known.
@@ -14309,7 +14318,12 @@ fn unsupported_member(class: &str, method: &str) -> Option<&'static str> {
 const SCANNER_METHODS: &[BuiltinMethod] = &[
     // The pattern READS, which search the input as characters rather than
     // read it as delimited tokens (see `scanner_pattern_read` in the VM).
-    bm("findInLine", &[BParam::Str], BRet::Str, "(Ljava/lang/String;)Ljava/lang/String;"),
+    bm(
+        "findInLine",
+        &[BParam::Str],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
     bm(
         "findInLine",
         &[BParam::Pattern],
@@ -14328,14 +14342,24 @@ const SCANNER_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(Ljava/util/regex/Pattern;I)Ljava/lang/String;",
     ),
-    bm("skip", &[BParam::Str], BRet::Scanner, "(Ljava/lang/String;)Ljava/util/Scanner;"),
+    bm(
+        "skip",
+        &[BParam::Str],
+        BRet::Scanner,
+        "(Ljava/lang/String;)Ljava/util/Scanner;",
+    ),
     bm(
         "skip",
         &[BParam::Pattern],
         BRet::Scanner,
         "(Ljava/util/regex/Pattern;)Ljava/util/Scanner;",
     ),
-    bm("tokens", &[], BRet::StreamString, "()Ljava/util/stream/Stream;"),
+    bm(
+        "tokens",
+        &[],
+        BRet::StreamString,
+        "()Ljava/util/stream/Stream;",
+    ),
     bm(
         "findAll",
         &[BParam::Str],
@@ -22409,12 +22433,37 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
     // ever name them. `__sleep`/`__join` answer whether an interrupt ended
     // the wait; the `Object` parameters are `Thread`s.
     bm("__sleep", &[L], BRet::Boolean, "(J)Z"),
-    bm("__join", &[BParam::Object, L], BRet::Boolean, "(Ljava/lang/Object;J)Z"),
-    bm("__start", &[BParam::Object, BParam::Boolean], BRet::Void, "(Ljava/lang/Object;Z)V"),
-    bm("__setMain", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm(
+        "__join",
+        &[BParam::Object, L],
+        BRet::Boolean,
+        "(Ljava/lang/Object;J)Z",
+    ),
+    bm(
+        "__start",
+        &[BParam::Object, BParam::Boolean],
+        BRet::Void,
+        "(Ljava/lang/Object;Z)V",
+    ),
+    bm(
+        "__setMain",
+        &[BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     bm("__currentThread", &[], BRet::Object, "()Ljava/lang/Object;"),
-    bm("__threadStatus", &[BParam::Object], BRet::Int, "(Ljava/lang/Object;)I"),
-    bm("__interrupt", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm(
+        "__threadStatus",
+        &[BParam::Object],
+        BRet::Int,
+        "(Ljava/lang/Object;)I",
+    ),
+    bm(
+        "__interrupt",
+        &[BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     bm(
         "__isInterrupted",
         &[BParam::Object, BParam::Boolean],
@@ -22434,9 +22483,24 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         BRet::Str,
         "(Ljava/lang/String;J)Ljava/lang/String;",
     ),
-    bm("__holdsLock", &[BParam::Object], BRet::Boolean, "(Ljava/lang/Object;)Z"),
-    bm("__monitorEnter", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
-    bm("__monitorExit", &[BParam::Object], BRet::Void, "(Ljava/lang/Object;)V"),
+    bm(
+        "__holdsLock",
+        &[BParam::Object],
+        BRet::Boolean,
+        "(Ljava/lang/Object;)Z",
+    ),
+    bm(
+        "__monitorEnter",
+        &[BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
+    bm(
+        "__monitorExit",
+        &[BParam::Object],
+        BRet::Void,
+        "(Ljava/lang/Object;)V",
+    ),
     // `System.gc()` is a REQUEST in Java ("the Java Virtual Machine expends
     // effort"), and it is one here too: the collector runs at the next
     // safepoint, which is the next instruction.
@@ -23319,7 +23383,13 @@ const MAP_METHODS: &[BuiltinMethod] = &[
     ),
     // A `ConcurrentHashMap`'s size as a `long` (a count past `int` is what
     // it was added for).
-    bm_at("mappingCount", &[], BRet::Long, "()J", TableFace::Concurrent),
+    bm_at(
+        "mappingCount",
+        &[],
+        BRet::Long,
+        "()J",
+        TableFace::Concurrent,
+    ),
     bm("getClass", &[], BRet::Class, "()Ljava/lang/Class;"),
     // `clone()` — a SHALLOW copy, which is exactly what the copy
     // constructors already build. It was refused as "clone is not supported
@@ -26544,7 +26614,9 @@ fn descriptor_params(descriptor: &str) -> Vec<&str> {
         match bytes[at] {
             b'[' => at += 1,
             b'L' => {
-                at = params[at..].find(';').map_or(bytes.len(), |end| at + end + 1);
+                at = params[at..]
+                    .find(';')
+                    .map_or(bytes.len(), |end| at + end + 1);
                 out.push(&params[start..at]);
                 start = at;
             }
@@ -37735,8 +37807,7 @@ impl BodyGen<'_> {
                 return None;
             }
         };
-        let sig = match self.conditional_resolution(&class_name, method, args, &arg_types, &sig)
-        {
+        let sig = match self.conditional_resolution(&class_name, method, args, &arg_types, &sig) {
             Ok(None) => sig,
             Ok(Some(better)) => better,
             Err(message) => {
@@ -39200,7 +39271,10 @@ impl BodyGen<'_> {
             && !self.table.has_class(class)
             && let Some(reason) = unsupported_member(class, method)
         {
-            self.error(span, format!("{class}.{method} exists in Java, but {reason}"));
+            self.error(
+                span,
+                format!("{class}.{method} exists in Java, but {reason}"),
+            );
             return None;
         }
         // `ConcurrentHashMap.newKeySet()` / `newKeySet(capacity)`: a set whose
@@ -48473,10 +48547,14 @@ impl BodyGen<'_> {
         };
         // The FIRST variable whose inferred argument is not the target's is
         // the one javac names.
-        let (index, name) = info.type_param_names.iter().enumerate().find(|(index, _)| {
-            let at = u8::try_from(*index).unwrap_or(u8::MAX);
-            self.table.type_arg(arg, rest, at) != self.table.type_arg(to_arg, to_rest, at)
-        })?;
+        let (index, name) = info
+            .type_param_names
+            .iter()
+            .enumerate()
+            .find(|(index, _)| {
+                let at = u8::try_from(*index).unwrap_or(u8::MAX);
+                self.table.type_arg(arg, rest, at) != self.table.type_arg(to_arg, to_rest, at)
+            })?;
         let at = u8::try_from(index).ok()?;
         let found = self.table.type_arg(arg, rest, at)?;
         let wanted = self.table.type_arg(to_arg, to_rest, at)?;
@@ -48485,7 +48563,11 @@ impl BodyGen<'_> {
         // Comparable<T>` adds `Integer` to the equality constraints), which
         // this does not model: the headline alone, rather than detail that
         // is wrong.
-        if info.type_param_bounds.get(index).is_none_or(Option::is_some) {
+        if info
+            .type_param_bounds
+            .get(index)
+            .is_none_or(Option::is_some)
+        {
             return Some(format!(
                 "incompatible types: cannot infer type arguments for {owner}<>"
             ));
