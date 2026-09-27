@@ -647,28 +647,39 @@ class JPanel extends Container {
   boolean __listens() {
     return __mouseListener != null || __motionListener != null || __keyListener != null;
   }
+  // A real click is three EVENTS — press, release, clicked — each dispatched
+  // on its own, so one listener's exception does not stop the next, as on a
+  // JDK. Each `__fire…` stands for that event's frames in a trace.
   void __onMouse(int x, int y) {
     if (__mouseListener != null) {
-      // A real click fires press, then release, then clicked.
       MouseEvent e = new MouseEvent(this, x, y);
-      __mouseListener.mousePressed(e);
-      __mouseListener.mouseReleased(e);
-      __mouseListener.mouseClicked(e);
+      __EventQueue.__dispatchWindow(new __PanelEvent(this, 0, e, null));
+      __EventQueue.__dispatchWindow(new __PanelEvent(this, 1, e, null));
+      __EventQueue.__dispatchWindow(new __PanelEvent(this, 2, e, null));
     }
   }
   void __onDrag(int x, int y) {
-    if (__motionListener != null) __motionListener.mouseDragged(new MouseEvent(this, x, y));
+    if (__motionListener != null) __fireDragged(new MouseEvent(this, x, y));
   }
+  void __firePressed(MouseEvent e) { __mouseListener.mousePressed(e); }
+  void __fireReleased(MouseEvent e) { __mouseListener.mouseReleased(e); }
+  void __fireClicked(MouseEvent e) { __mouseListener.mouseClicked(e); }
+  void __fireDragged(MouseEvent e) { __motionListener.mouseDragged(e); }
+  void __fireKeyPressed(KeyEvent e) { __keyListener.keyPressed(e); }
+  void __fireKeyTyped(KeyEvent e) { __keyListener.keyTyped(e); }
+  void __fireKeyReleased(KeyEvent e) { __keyListener.keyReleased(e); }
   void __onKey(int type, int code, char ch) {
     if (__keyListener == null) return;
     KeyEvent e = new KeyEvent(this, code, ch);
     if (type == 0) {
       // keydown: keyPressed, then keyTyped for a printable character (matching
-      // real Java's ordering) — both delivered in one host round trip.
-      __keyListener.keyPressed(e);
-      if (ch != KeyEvent.CHAR_UNDEFINED && ch >= 32) __keyListener.keyTyped(e);
+      // real Java's ordering) — two events, delivered in one host round trip.
+      __EventQueue.__dispatchWindow(new __PanelEvent(this, 3, null, e));
+      if (ch != KeyEvent.CHAR_UNDEFINED && ch >= 32) {
+        __EventQueue.__dispatchWindow(new __PanelEvent(this, 4, null, e));
+      }
     } else {
-      __keyListener.keyReleased(e);
+      __fireKeyReleased(e);
     }
   }
   // The event loop re-renders (and so re-paints) after every event, so a
@@ -763,7 +774,8 @@ class JTabbedPane extends Component {
 
   boolean __listens() { return __listener != null; }
   void __setFromHost(String value) { __selected = __Integer.parseInt(value); }
-  void __onEvent() { if (__listener != null) __listener.stateChanged(new ChangeEvent(this)); }
+  void __onEvent() { if (__listener != null) __fireChange(new ChangeEvent(this)); }
+  void __fireChange(ChangeEvent e) { __listener.stateChanged(e); }
 
   String __json() {
     StringBuilder tabs = new StringBuilder("[");
@@ -933,8 +945,11 @@ class JButton extends Component {
     __SwingRuntime.__interactive = true;
   }
   // Programmatically activate the button (fires its ActionListener).
-  public void doClick() { __onEvent(); }
-  void __onEvent() {
+  public void doClick() { __fireAction(); }
+  void __onEvent() { __fireAction(); }
+  // The listener's call, as a JDK's button makes it; what reached it — a
+  // click (`__onEvent`) or `doClick` — is the caller.
+  void __fireAction() {
     if (__listener != null) __listener.actionPerformed(new ActionEvent(this, getActionCommand()));
   }
   boolean __listens() { return __listener != null; }
@@ -963,13 +978,16 @@ class JToggleButton extends Component {
   public String getActionCommand() { return __command == null ? __text : __command; }
   public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
   public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
-  public void doClick() { __sel = !__sel; __onEvent(); }
+  public void doClick() { __sel = !__sel; __fireItem(); __fireAction(); }
   void __setFromHost(String value) { __sel = value.equals("true"); }
-  void __onEvent() {
+  void __onEvent() { __fireItem(); __fireAction(); }
+  void __fireItem() {
     if (__itemListener != null) {
       int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
       __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
     }
+  }
+  void __fireAction() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this, getActionCommand()));
   }
   boolean __listens() { return __actionListener != null || __itemListener != null; }
@@ -1038,16 +1056,25 @@ abstract class JTextComponent extends Component {
     __caretReq = null;
     return s;
   }
-  void __setFromHost(String value) { __text = value; }
+  // The host's text replaces ours; what it replaced is what an edit is
+  // measured against. (It started as "", so a field built with text and then
+  // shortened reported an INSERT.)
+  void __setFromHost(String value) {
+    __lastText = __text;
+    __text = value;
+  }
   // The text synced into __text before this; fire insert/remove by length delta.
   void __onDoc() {
     if (__document == null || __document.__listener == null) return;
     DocumentEvent e = new DocumentEvent(__document);
-    if (__text.length() > __lastText.length()) __document.__listener.insertUpdate(e);
-    else if (__text.length() < __lastText.length()) __document.__listener.removeUpdate(e);
-    else __document.__listener.changedUpdate(e);
+    String before = __lastText;
     __lastText = __text;
+    if (__text.length() > before.length()) __fireInsert(e);
+    else if (__text.length() < before.length()) __fireRemove(e);
+    else __document.__listener.changedUpdate(e);
   }
+  void __fireInsert(DocumentEvent e) { __document.__listener.insertUpdate(e); }
+  void __fireRemove(DocumentEvent e) { __document.__listener.removeUpdate(e); }
 }
 
 class JTextField extends JTextComponent {
@@ -1074,7 +1101,8 @@ class JTextField extends JTextComponent {
   public void setActionCommand(String command) { __command = command; }
   public String getActionCommand() { return __command == null ? __text : __command; }
   boolean __listens() { return __actionListener != null; }
-  void __onEvent() {
+  void __onEvent() { __fireAction(); }
+  void __fireAction() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this, getActionCommand()));
   }
   String __json() {
@@ -1192,11 +1220,14 @@ class JCheckBox extends Component {
   public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
   public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
   void __setFromHost(String value) { __sel = value.equals("true"); }
-  void __onEvent() {
+  void __onEvent() { __fireItem(); __fireAction(); }
+  void __fireItem() {
     if (__itemListener != null) {
       int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
       __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
     }
+  }
+  void __fireAction() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
   }
   boolean __listens() { return __itemListener != null || __actionListener != null; }
@@ -1222,11 +1253,14 @@ class JRadioButton extends Component {
   public void addItemListener(ItemListener l) { __itemListener = l; __SwingRuntime.__interactive = true; }
   public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
   void __setFromHost(String value) { __sel = value.equals("true"); }
-  void __onEvent() {
+  void __onEvent() { __fireItem(); __fireAction(); }
+  void __fireItem() {
     if (__itemListener != null) {
       int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
       __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
     }
+  }
+  void __fireAction() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
   }
   boolean __listens() { return __itemListener != null || __actionListener != null; }
@@ -1309,7 +1343,8 @@ class JComboBox extends Component {
     if (__editable) __model.setSelectedItem(value);
     else setSelectedIndex(__Integer.parseInt(value));
   }
-  void __onEvent() {
+  void __onEvent() { __fireAction(); }
+  void __fireAction() {
     if (__actionListener != null) __actionListener.actionPerformed(new ActionEvent(this));
   }
   boolean __listens() { return __actionListener != null; }
@@ -1596,9 +1631,8 @@ class JList extends Component {
       start = comma + 1;
     }
   }
-  void __onEvent() {
-    if (__listener != null) __listener.valueChanged(new ListSelectionEvent(this));
-  }
+  void __onEvent() { if (__listener != null) __fireSelection(new ListSelectionEvent(this)); }
+  void __fireSelection(ListSelectionEvent e) { __listener.valueChanged(e); }
   boolean __listens() { return __listener != null; }
   String __json() {
     StringBuilder opts = new StringBuilder("[");
@@ -1648,9 +1682,8 @@ class JSlider extends Component {
   public int getMaximum() { return __max; }
   public void addChangeListener(ChangeListener l) { __changeListener = l; __SwingRuntime.__interactive = true; }
   void __setFromHost(String value) { __value = __Integer.parseInt(value); }
-  void __onEvent() {
-    if (__changeListener != null) __changeListener.stateChanged(new ChangeEvent(this));
-  }
+  void __onEvent() { if (__changeListener != null) __fireChange(new ChangeEvent(this)); }
+  void __fireChange(ChangeEvent e) { __changeListener.stateChanged(e); }
   boolean __listens() { return __changeListener != null; }
   String __json() {
     return "{\"type\":\"slider\",\"min\":" + __min + ",\"max\":" + __max + ",\"value\":" + __value
@@ -1726,9 +1759,8 @@ class JSpinner extends Component {
   public SpinnerNumberModel getModel() { return __model; }
   public void addChangeListener(ChangeListener l) { __changeListener = l; __SwingRuntime.__interactive = true; }
   void __setFromHost(String value) { __model.__value = __Integer.parseInt(value); }
-  void __onEvent() {
-    if (__changeListener != null) __changeListener.stateChanged(new ChangeEvent(this));
-  }
+  void __onEvent() { if (__changeListener != null) __fireChange(new ChangeEvent(this)); }
+  void __fireChange(ChangeEvent e) { __changeListener.stateChanged(e); }
   boolean __listens() { return __changeListener != null; }
   String __json() {
     return "{\"type\":\"spinner\",\"value\":" + __model.__value + ",\"min\":" + __model.__min
@@ -2240,8 +2272,9 @@ class JTree extends Component {
     }
   }
   void __onEvent() {
-    if (__listener != null) __listener.valueChanged(new TreeSelectionEvent(this, getSelectionPath()));
+    if (__listener != null) __fireSelection(new TreeSelectionEvent(this, getSelectionPath()));
   }
+  void __fireSelection(TreeSelectionEvent e) { __listener.valueChanged(e); }
   boolean __listens() { return __listener != null; }
 
   String __nodeJson(Object node, Object parent) {
@@ -2467,10 +2500,9 @@ class JTable extends Component {
     }
   }
   void __onEvent() {
-    if (__selectionModel.__listener != null) {
-      __selectionModel.__listener.valueChanged(new ListSelectionEvent(this));
-    }
+    if (__selectionModel.__listener != null) __fireSelection(new ListSelectionEvent(this));
   }
+  void __fireSelection(ListSelectionEvent e) { __selectionModel.__listener.valueChanged(e); }
   boolean __listens() { return __selectionModel.__listener != null; }
   boolean __editable() { return isCellEditable(0, 0); }
   String __colsJson() {
@@ -2574,7 +2606,8 @@ class JMenuItem extends Component {
     return ",\"accel\":\"" + Component.__esc(__accel.__text()) + "\"";
   }
   public void addActionListener(ActionListener l) { __listener = l; __SwingRuntime.__interactive = true; }
-  void __onEvent() {
+  void __onEvent() { __fireAction(); }
+  void __fireAction() {
     if (__listener != null) __listener.actionPerformed(new ActionEvent(this, __text));
   }
   boolean __listens() { return __listener != null; }
@@ -2600,10 +2633,16 @@ class JCheckBoxMenuItem extends JMenuItem {
   boolean __listens() { return __listener != null || __itemListener != null; }
   void __onEvent() {
     __sel = !__sel; // activating a check item toggles it
+    __fireItem();
+    __fireAction();
+  }
+  void __fireItem() {
     if (__itemListener != null) {
       int state = __sel ? ItemEvent.SELECTED : ItemEvent.DESELECTED;
       __itemListener.itemStateChanged(new ItemEvent(this, state, __text));
     }
+  }
+  void __fireAction() {
     if (__listener != null) __listener.actionPerformed(new ActionEvent(this, __text));
   }
   String __json() {
@@ -2626,6 +2665,9 @@ class JRadioButtonMenuItem extends JMenuItem {
   void __onEvent() {
     if (__bgroup != null) __bgroup.__selectRadioMenu(this);
     else __sel = true;
+    __fireAction();
+  }
+  void __fireAction() {
     if (__listener != null) __listener.actionPerformed(new ActionEvent(this, __text));
   }
   String __json() {
@@ -2887,8 +2929,14 @@ class __EventQueue {
   static boolean __hostGone = false;
 
   static void __post(Runnable task) {
+    __postEvent(new __InvocationEvent(task));
+  }
+
+  // `invokeAndWait`'s task is its own event: a JDK runs it through the
+  // dispatch that catches what it throws.
+  static void __postEvent(Runnable event) {
     synchronized (__lock) {
-      __tasks.add(new __InvocationEvent(task));
+      __tasks.add(event);
       __ensureRunning();
       __lock.notifyAll();
     }
@@ -2926,12 +2974,23 @@ class __EventQueue {
       throw new Error("Cannot call invokeAndWait from the event dispatcher thread");
     }
     __InvokeAndWait job = new __InvokeAndWait(r);
-    __post(job);
+    __postEvent(job);
     synchronized (job) {
       while (!job.__done) job.wait();
     }
     if (job.__failure != null) {
       throw new java.lang.reflect.InvocationTargetException(job.__failure);
+    }
+  }
+
+  // A window event: the same, through a method no trace names — the event's
+  // own frames (`__fire…` and its caller) stand for a JDK's.
+  static void __dispatchWindow(Runnable event) {
+    try {
+      event.run();
+    } catch (Throwable thrown) {
+      System.err.print("Exception in thread \"" + Thread.currentThread().getName() + "\" ");
+      thrown.printStackTrace();
     }
   }
 
@@ -2983,7 +3042,7 @@ class __EventQueue {
             }
           }
         } else if (!payload.equals("__idle")) {
-          __dispatch(new __UiEvent(frame, payload));
+          __SwingRuntime.__handle(frame, payload);
         }
         continue;
       }
@@ -3065,11 +3124,37 @@ class __TimerTick implements Runnable {
   public void run() { __timer.__fire(); }
 }
 
-class __UiEvent implements Runnable {
-  JFrame __frame;
-  String __payload;
-  __UiEvent(JFrame frame, String payload) { __frame = frame; __payload = payload; }
-  public void run() { __SwingRuntime.__handle(__frame, __payload); }
+// One event from the window, delivered to its component.
+class __Deliver implements Runnable {
+  Component __c;
+  int __kind;
+  int[] __at;
+  __Deliver(Component c, int kind, int[] at) { __c = c; __kind = kind; __at = at; }
+  public void run() {
+    if (__kind == 0) __c.__onDoc();
+    else if (__kind == 1) __c.__onKey(__at[0], __at[1], (char) __at[2]);
+    else if (__kind == 2) __c.__onDrag(__at[0], __at[1]);
+    else if (__kind == 3) __c.__onMouse(__at[0], __at[1]);
+    else __c.__onEvent();
+  }
+}
+
+// A panel's mouse or key event: each of a click's three, and each of a key's.
+class __PanelEvent implements Runnable {
+  JPanel __panel;
+  int __kind;
+  MouseEvent __mouse;
+  KeyEvent __key;
+  __PanelEvent(JPanel panel, int kind, MouseEvent mouse, KeyEvent key) {
+    __panel = panel; __kind = kind; __mouse = mouse; __key = key;
+  }
+  public void run() {
+    if (__kind == 0) __panel.__firePressed(__mouse);
+    else if (__kind == 1) __panel.__fireReleased(__mouse);
+    else if (__kind == 2) __panel.__fireClicked(__mouse);
+    else if (__kind == 3) __panel.__fireKeyPressed(__key);
+    else __panel.__fireKeyTyped(__key);
+  }
 }
 
 class JFrame extends Container {
@@ -3307,7 +3392,9 @@ class Document {
     __listener = l;
     __SwingRuntime.__interactive = true;
   }
-  public int getLength() { return __owner.__lastText.length(); }
+  public int getLength() {
+    return __owner instanceof JTextComponent ? ((JTextComponent) __owner).__text.length() : 0;
+  }
 }
 
 // A checked exception thrown by the text-offset queries (getLineStartOffset,
@@ -3402,6 +3489,12 @@ interface MouseListener {
 interface MouseMotionListener {
   void mouseDragged(MouseEvent e);
   void mouseMoved(MouseEvent e);
+}
+
+// java.awt.event.MouseMotionAdapter: the motion half alone.
+class MouseMotionAdapter implements MouseMotionListener {
+  public void mouseDragged(MouseEvent e) {}
+  public void mouseMoved(MouseEvent e) {}
 }
 
 // The mouse listener interfaces aren't functional (no lambdas), so students
@@ -3592,11 +3685,13 @@ class __SwingRuntime {
       int[] click = __coordOf(body, "__mouse=");
       // A "__doc=" line marks a per-keystroke DocumentListener edit (fires
       // insert/remove) vs a normal control activation (button/Enter/...).
-      if (__hasLine(body, "__doc=")) c.__onDoc();
-      else if (key != null) c.__onKey(key[0], key[1], (char) key[2]);
-      else if (drag != null) c.__onDrag(drag[0], drag[1]);
-      else if (click != null) c.__onMouse(click[0], click[1]);
-      else c.__onEvent();
+      Runnable delivery;
+      if (__hasLine(body, "__doc=")) delivery = new __Deliver(c, 0, null);
+      else if (key != null) delivery = new __Deliver(c, 1, key);
+      else if (drag != null) delivery = new __Deliver(c, 2, drag);
+      else if (click != null) delivery = new __Deliver(c, 3, click);
+      else delivery = new __Deliver(c, 4, null);
+      __EventQueue.__dispatchWindow(delivery);
     }
   }
 

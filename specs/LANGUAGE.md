@@ -15889,6 +15889,31 @@ failure on the dispatch thread prints a JDK's whole trace, the dispatch
 machinery beneath the program's frame included (`library_frame_lines` writes a
 bundled frame as the JDK frames it stands for).
 
+Then the traces of listeners a WINDOW event runs, which need a display to
+measure: a GUI build of the same JDK under Xvfb, `java.awt.Robot` clicking and
+typing (`scripts/compat/awt-traces/`). All 31 captured scenarios — buttons,
+toggles, check boxes, radio buttons, a text field's Enter and its document,
+a panel's mouse, drag and key listeners, combo box, list, slider, spinner,
+tabs, tree, table, and the three menu items — print a JDK's frames line for
+line (`swing_listener_traces_are_a_jdks` compares against the stored
+captures; `a_listener_run_by_do_click` against a headless JDK). Measuring them
+found three things that were wrong, not merely unshown:
+
+- **A click is three events.** `mousePressed`, `mouseReleased` and
+  `mouseClicked` were one delivery here, so a `mousePressed` that threw
+  skipped the other two; on a JDK each is its own event, and so is each of a
+  key's `keyPressed` and `keyTyped` (`swing_a_click_is_three_events`).
+- **An edit was measured against `""`.** A text field built with text and then
+  shortened reported `insertUpdate`, and `getDocument().getLength()` read the
+  same stale value.
+- **`java.awt.event.MouseMotionAdapter`** did not exist.
+
+Two things measured and left: a mouse selection in a `JList` fires its
+listener twice on a JDK (on press, "adjusting", then on release) and a slider
+drag once per step, where the window here reports one change; and `JComboBox`,
+`JList` and their models are not generic here (`JComboBox<String>` is refused),
+which is its own unit.
+
 A headless JDK runs all of this except a window, so the differential harness
 now passes `-Djava.awt.headless=true` and the thread, `invokeLater`/
 `invokeAndWait` and `Timer` behaviour is pinned against it

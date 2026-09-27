@@ -28,6 +28,7 @@ use crate::value::{Heap, HeapRef, IteratorWrites, JValue, MapViewKind};
 use crate::vfs::VirtualFileSystem;
 use crate::vm::VmError;
 
+mod awt_frames;
 mod threads;
 
 /// State for one `run`: the loaded classes, heap, interned strings,
@@ -21513,9 +21514,17 @@ fn library_frame_lines(class: &str, method: &str) -> &'static [&'static str] {
         ("Timer", "__fire") => {
             &["java.desktop/javax.swing.Timer.fireActionPerformed(Timer.java:317)"]
         }
+        // `invokeAndWait`'s task goes through the dispatch that CATCHES what
+        // it throws, a different line of the same method.
+        ("__InvokeAndWait", "run") => {
+            &["java.desktop/java.awt.event.InvocationEvent.dispatch(InvocationEvent.java:303)"]
+        }
         ("__EventQueue", "__dispatch") => DISPATCH,
         ("__EventDispatchThread", "run") => PUMP,
-        _ => &[],
+        // A listener a window event (or `doClick`) ran: the component's
+        // firing chain and how the event reached it, measured under a display
+        // (scripts/compat/awt-traces).
+        _ => awt_frames::swing_frame_lines(class, method).unwrap_or(&[]),
     }
 }
 

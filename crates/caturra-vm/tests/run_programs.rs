@@ -3174,6 +3174,7 @@ struct ScriptedUiConsole {
     events: std::collections::VecDeque<Option<String>>,
     dialogs: std::collections::VecDeque<Option<String>>,
     stdout: Vec<u8>,
+    stderr: Vec<u8>,
     clock_millis: i64,
     trees: Vec<String>,
 }
@@ -3184,6 +3185,7 @@ impl ScriptedUiConsole {
             events: events.into_iter().collect(),
             dialogs: std::collections::VecDeque::new(),
             stdout: Vec::new(),
+            stderr: Vec::new(),
             clock_millis: 0,
             trees: Vec::new(),
         }
@@ -3202,7 +3204,9 @@ impl caturra_vm::ConsoleIo for ScriptedUiConsole {
     fn stdout(&mut self, bytes: &[u8]) {
         self.stdout.extend_from_slice(bytes);
     }
-    fn stderr(&mut self, _bytes: &[u8]) {}
+    fn stderr(&mut self, bytes: &[u8]) {
+        self.stderr.extend_from_slice(bytes);
+    }
     fn read_line(&mut self) -> Option<String> {
         None
     }
@@ -3294,6 +3298,153 @@ fn run_swing_scripted_trees(
         "{result:?}"
     );
     (console.stdout_text(), console.trees)
+}
+
+/// The library frames of the first trace in `captured` whose exception carried
+/// `message`: everything from the first `java.desktop`/`java.base` frame to the
+/// end of that trace.
+fn library_frames_of(captured: &str, message: &str) -> Vec<String> {
+    let banner = format!("java.lang.IllegalStateException: {message}");
+    let mut lines = captured.lines().skip_while(|line| !line.ends_with(&banner));
+    lines.next().unwrap_or_else(|| panic!("no trace for {message:?}"));
+    lines
+        .take_while(|line| line.starts_with("\tat "))
+        .filter(|line| line.starts_with("\tat java.desktop/") || line.starts_with("\tat java.base/"))
+        .map(str::to_owned)
+        .collect()
+}
+
+#[test]
+fn swing_a_click_is_three_events() {
+    // On a JDK a click is three EVENTS — pressed, released, clicked — and a
+    // key press two (pressed, typed); what one listener throws ends only its
+    // own event. They were delivered in one call here, so a failing
+    // mousePressed silently skipped the other two. Ids: frame c0, panel c1.
+    let out = run_swing_scripted(
+        r#"
+        import javax.swing.*;
+        import java.awt.event.*;
+        public class Main {
+            public static void main(String[] args) {
+                JFrame frame = new JFrame("W");
+                JPanel panel = new JPanel();
+                panel.addMouseListener(new MouseAdapter() {
+                    public void mousePressed(MouseEvent e) { throw new IllegalStateException("pressed"); }
+                    public void mouseReleased(MouseEvent e) { System.out.println("released"); }
+                    public void mouseClicked(MouseEvent e) { System.out.println("clicked"); }
+                });
+                panel.addKeyListener(new KeyAdapter() {
+                    public void keyPressed(KeyEvent e) { throw new IllegalStateException("key"); }
+                    public void keyTyped(KeyEvent e) { System.out.println("typed " + e.getKeyChar()); }
+                });
+                frame.add(panel);
+                frame.setVisible(true);
+            }
+        }
+        "#,
+        "Main",
+        vec![
+            Some(String::from("c1\n__mouse=5,5")),
+            Some(String::from("c1\n__key=0,66,98")),
+        ],
+    );
+    assert_eq!(out, "released\nclicked\ntyped b\n");
+}
+
+#[test]
+fn swing_listener_traces_are_a_jdks() {
+    // What a JDK prints beneath a listener that a window event ran, measured
+    // under a display (scripts/compat/awt-traces: Robot-driven clicks and
+    // keys under Xvfb): each control's own firing chain, the UI delegate, AWT's
+    // routing, the queue, the pump. Each scenario builds that control with a
+    // listener that throws, scripts the event, and compares caturra's library
+    // frames with the captured JDK's, line for line. Ids: frame c0, control c1.
+    let captures = [
+        include_str!("../../../scripts/compat/awt-traces/rig1.txt"),
+        include_str!("../../../scripts/compat/awt-traces/rig2.txt"),
+        include_str!("../../../scripts/compat/awt-traces/rig3.txt"),
+    ]
+    .join("\n");
+    // (messages thrown, setup of `x`, the scripted event payload)
+    let scenarios: &[(&[&str], &str, &str)] = &[
+        (&["button action"], r#"JButton x = new JButton("B"); x.addActionListener(e -> fail("button action"));"#, "c1"),
+        (&["toggle item"], r#"JToggleButton x = new JToggleButton("T"); x.addItemListener(e -> fail("toggle item"));"#, "c1\nc1=true"),
+        (&["toggle action"], r#"JToggleButton x = new JToggleButton("T"); x.addActionListener(e -> fail("toggle action"));"#, "c1\nc1=true"),
+        (&["check item"], r#"JCheckBox x = new JCheckBox("X"); x.addItemListener(e -> fail("check item"));"#, "c1\nc1=true"),
+        (&["check action"], r#"JCheckBox x = new JCheckBox("X"); x.addActionListener(e -> fail("check action"));"#, "c1\nc1=true"),
+        (&["radio item"], r#"JRadioButton x = new JRadioButton("R"); x.addItemListener(e -> fail("radio item"));"#, "c1\nc1=true"),
+        (&["radio action"], r#"JRadioButton x = new JRadioButton("R"); x.addActionListener(e -> fail("radio action"));"#, "c1\nc1=true"),
+        (&["field action"], r#"JTextField x = new JTextField(10); x.addActionListener(e -> fail("field action"));"#, "c1"),
+        (&["doc insert"], r#"JTextField x = new JTextField(10); x.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent e) { fail("doc insert"); }
+            public void removeUpdate(DocumentEvent e) {}
+            public void changedUpdate(DocumentEvent e) {} });"#, "c1\n__doc=1\nc1=a"),
+        (&["doc remove"], r#"JTextField x = new JTextField("abc", 10); x.getDocument().addDocumentListener(new DocumentListener() {
+            public void insertUpdate(DocumentEvent e) {}
+            public void removeUpdate(DocumentEvent e) { fail("doc remove"); }
+            public void changedUpdate(DocumentEvent e) {} });"#, "c1\n__doc=1\nc1=ab"),
+        (&["mouse pressed", "mouse released", "mouse clicked"], r#"JPanel x = new JPanel(); x.addMouseListener(new MouseAdapter() {
+            public void mousePressed(MouseEvent e) { fail("mouse pressed"); }
+            public void mouseReleased(MouseEvent e) { fail("mouse released"); }
+            public void mouseClicked(MouseEvent e) { fail("mouse clicked"); } });"#, "c1\n__mouse=5,5"),
+        (&["mouse dragged"], r#"JPanel x = new JPanel(); x.addMouseMotionListener(new MouseMotionAdapter() {
+            public void mouseDragged(MouseEvent e) { fail("mouse dragged"); } });"#, "c1\n__drag=5,5"),
+        (&["key pressed", "key typed"], r#"JPanel x = new JPanel(); x.addKeyListener(new KeyAdapter() {
+            public void keyPressed(KeyEvent e) { fail("key pressed"); }
+            public void keyTyped(KeyEvent e) { fail("key typed"); } });"#, "c1\n__key=0,66,98"),
+        (&["key released"], r#"JPanel x = new JPanel(); x.addKeyListener(new KeyAdapter() {
+            public void keyReleased(KeyEvent e) { fail("key released"); } });"#, "c1\n__key=1,66,98"),
+        (&["combo action"], r#"JComboBox x = new JComboBox(new String[] {"one", "two"}); x.addActionListener(e -> fail("combo action"));"#, "c1"),
+        (&["list selection"], r#"JList x = new JList(new String[] {"a", "b"}); x.addListSelectionListener(e -> fail("list selection"));"#, "c1"),
+        (&["slider change"], r#"JSlider x = new JSlider(0, 100, 50); x.addChangeListener(e -> fail("slider change"));"#, "c1\nc1=60"),
+        (&["spinner change"], r#"JSpinner x = new JSpinner(new SpinnerNumberModel(5, 0, 10, 1)); x.addChangeListener(e -> fail("spinner change"));"#, "c1\nc1=6"),
+        (&["tabs change"], r#"JTabbedPane x = new JTabbedPane(); x.addChangeListener(e -> fail("tabs change"));
+            x.addTab("one", new JLabel("1")); x.addTab("two", new JLabel("2"));"#, "c1\nc1=1"),
+        (&["tree selection"], r#"JTree x = new JTree(new DefaultMutableTreeNode("root")); x.addTreeSelectionListener(e -> fail("tree selection"));"#, "c1"),
+        (&["table selection"], r#"JTable x = new JTable(new Object[][] {{"a", 1}}, new Object[] {"x", "y"});
+            x.getSelectionModel().addListSelectionListener(e -> fail("table selection"));"#, "c1"),
+        (&["menu item action"], r#"JMenuItem x = new JMenuItem("I"); x.addActionListener(e -> fail("menu item action"));"#, "c1"),
+        (&["check menu item"], r#"JCheckBoxMenuItem x = new JCheckBoxMenuItem("C"); x.addItemListener(e -> fail("check menu item"));"#, "c1"),
+        (&["check menu action"], r#"JCheckBoxMenuItem x = new JCheckBoxMenuItem("C"); x.addActionListener(e -> fail("check menu action"));"#, "c1"),
+        (&["radio menu action"], r#"JRadioButtonMenuItem x = new JRadioButtonMenuItem("R"); x.addActionListener(e -> fail("radio menu action"));"#, "c1"),
+    ];
+    for (messages, setup, payload) in scenarios {
+        // The control is made FIRST (id c1, the frame c0 before it); a menu
+        // item is registered through a menu bar the window carries.
+        let add = if setup.contains("MenuItem") {
+            "JMenuBar bar = new JMenuBar(); JMenu menu = new JMenu(\"M\"); menu.add(x); bar.add(menu); frame.setJMenuBar(bar);"
+        } else {
+            "frame.add(x);"
+        };
+        let source = format!(
+            "import javax.swing.*;\nimport javax.swing.event.*;\nimport javax.swing.tree.*;\n\
+             import java.awt.*;\nimport java.awt.event.*;\n\
+             public class Main {{\n    static void fail(String what) {{ throw new IllegalStateException(what); }}\n\
+             public static void main(String[] args) {{\n        JFrame frame = new JFrame(\"R\");\n        {setup}\n        {add}\n\
+             frame.setVisible(true);\n    }}\n}}\n"
+        );
+        let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
+            path: String::from("Main.java"),
+            text: source.clone(),
+        }]);
+        assert!(compilation.success(), "{messages:?}: {:?}\n{source}", compilation.diagnostics);
+        let mut vfs = VirtualFileSystem::new();
+        let mut console = ScriptedUiConsole::new(vec![Some((*payload).to_owned())]);
+        let mut vm = Vm::new(VmOptions::default(), &mut vfs, &mut console);
+        for class in compilation.classes {
+            vm.load_class(class.class_file).expect("load");
+        }
+        let result = vm.run_main("Main", &[]);
+        assert!(matches!(result, Ok(ExitStatus::Completed)), "{messages:?}: {result:?}");
+        let stderr = String::from_utf8_lossy(&console.stderr).into_owned();
+        for message in *messages {
+            assert_eq!(
+                library_frames_of(&stderr, message),
+                library_frames_of(&captures, message),
+                "{message}: caturra printed\n{stderr}"
+            );
+        }
+    }
 }
 
 #[test]

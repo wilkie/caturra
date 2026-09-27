@@ -63893,3 +63893,34 @@ public class DispatchFailure {
 }
 "#
 );
+
+// `doClick()` fires a button's listeners from the calling thread, through
+// the button's model — the frames a JDK prints beneath the listener are the
+// same firing chain a click has, then `AbstractButton.doClick` twice.
+differential_test_stderr!(
+    a_listener_run_by_do_click,
+    "DoClickTrace",
+    r#"
+import javax.swing.*;
+
+public class DoClickTrace {
+    public static void main(String[] args) {
+        JToggleButton toggle = new JToggleButton("T");
+        toggle.addItemListener(e -> System.out.println("item " + toggle.isSelected()));
+        toggle.addActionListener(e -> { throw new IllegalStateException("toggled"); });
+        try {
+            toggle.doClick();
+        } catch (IllegalStateException e) {
+            e.printStackTrace();
+        }
+        JButton button = new JButton("B");
+        button.addActionListener(e -> { throw new IllegalArgumentException("clicked"); });
+        try {
+            button.doClick();
+        } catch (IllegalArgumentException e) {
+            e.printStackTrace();
+        }
+    }
+}
+"#
+);

@@ -483,18 +483,29 @@ primitives except the one wait:
   window's wait can both be outstanding; and `JOptionPane` shows one dialog
   at a time (a second thread's waits on a lock), so an answer always belongs
   to the dialog that is up.
-- **The dispatch thread's traces** are a JDK's to the line for what it can
-  measure headless — a posted task and a timer's tick: the bundled runtime has
-  a JDK's shape (`__EventDispatchThread extends Thread`, posted work wrapped in
-  an `__InvocationEvent`), and the interpreter's `library_frame_lines` writes
-  each bundled frame as the JDK frames it stands for. A listener run by a
-  window event shows the same dispatch frames, but not the component
-  machinery a JDK's click passes through, which needs a display to measure.
+- **The dispatch thread's traces** are a JDK's to the line — for a posted
+  task, a timer's tick, and a listener a window event runs. The bundled runtime
+  has a JDK's shape (`__EventDispatchThread extends Thread`, posted work
+  wrapped in an `__InvocationEvent`, every listener called from its own
+  `__fire…` method, and the event's entry point — a click's `__onEvent`, or
+  `doClick` — above that), and the interpreter's `library_frame_lines` writes
+  each bundled frame as the JDK frames it stands for. A window event's frames
+  need a display to measure, so they were: `scripts/compat/awt-traces/`
+  captures them with a GUI build of the same JDK (Ubuntu's `openjdk-11-jre`,
+  fetched with `apt download`, beside the installed headless one) under Xvfb,
+  `java.awt.Robot` making the clicks and keystrokes, and `generate.py` turns
+  the 31 captured scenarios into `interpreter/awt_frames.rs`, splitting each
+  chain into the listener's call and how the event arrived. Measuring them
+  showed two things that were WRONG, not just unshown: a click is three
+  events (pressed, released, clicked) and a key two (pressed, typed), each
+  dispatched on its own, so one listener's exception must not skip the next;
+  and a text component compared an edit against `""` rather than the text it
+  had, so shortening a field built with text reported an insert.
 
 Pinned by `the_event_dispatch_thread`,
 `a_timer_alone_does_not_keep_a_program_alive`,
 `the_dispatch_thread_keeps_a_timer_going`, `an_exception_on_the_dispatch_thread`
-(whole traces; against a headless JDK — the harness now passes `-Djava.awt.headless=true`),
+(whole traces; against a headless JDK — and `a_listener_run_by_do_click` — the harness now passes `-Djava.awt.headless=true`),
 the scripted-window tests `swing_a_worker_thread_runs_while_the_window_waits`
 and `swing_main_animates_a_label_while_the_window_is_up`, and the browser test
 "a worker thread updates the window while it stays responsive" (the
