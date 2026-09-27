@@ -13015,6 +13015,8 @@ impl<'run> Interpreter<'run> {
                 (method.to_owned(), descriptor.to_owned())
             } else if let Some(sole) = self.sole_declared_method(class_name) {
                 sole
+            } else if let Some(erased) = self.erased_functional_method(class_name, args.len()) {
+                erased
             } else {
                 (method.to_owned(), descriptor.to_owned())
             };
@@ -13024,6 +13026,39 @@ impl<'run> Interpreter<'run> {
             UserDispatch::Call(frame) => self.run_nested(frame)?,
             UserDispatch::Value(value) => value,
         })
+    }
+
+    /// A program class that implements a primitive-specialized functional
+    /// interface (`class Add implements IntBinaryOperator`) answers the call
+    /// the library makes through the ERASED method its bridge declares —
+    /// `applyAsInt(Object, Object)` — whatever name the caller used. The one
+    /// method of that arity, in the class or above it, whose parameters are
+    /// all `Object`.
+    fn erased_functional_method(&self, class_name: &str, arity: usize) -> Option<(String, String)> {
+        let wanted = format!("({})", "Ljava/lang/Object;".repeat(arity));
+        let mut found: Option<(String, String)> = None;
+        let mut current = self.classes.get(class_name);
+        for _ in 0..=self.classes.len() {
+            let Some(class) = current else {
+                break;
+            };
+            for member in &class.methods {
+                let name = class.constant_pool.get_utf8(member.name_index)?;
+                let descriptor = class.constant_pool.get_utf8(member.descriptor_index)?;
+                if name.starts_with('<') || !descriptor.starts_with(&wanted) {
+                    continue;
+                }
+                if found.as_ref().is_some_and(|(seen, _)| seen != name) {
+                    return None;
+                }
+                found.get_or_insert_with(|| (name.to_owned(), descriptor.to_owned()));
+            }
+            current = class
+                .constant_pool
+                .get_class_name(class.super_class)
+                .and_then(|parent| self.classes.get(parent));
+        }
+        found
     }
 
     /// The one method a class declares, name and descriptor — `None` unless

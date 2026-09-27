@@ -24662,20 +24662,12 @@ public class CopiedEntries {
 "#
 );
 
-// The one KNOWN case where caturra accepts what javac rejects.
-//
-// `Map.Entry.comparingByValue()` with no type witness infers
-// `Comparator<Entry<Object, V>>`, and `.reversed()` freezes that before the
-// target type can correct it — so javac demands
-// `Map.Entry.<K, V>comparingByValue()`, a typed variable, or a wrapper.
-// caturra's generics are erased, and the parser DISCARDS a type witness, so
-// the two spellings are the same tree here and cannot be told apart.
-//
-// All three forms javac accepts do work (pinned above), so nothing legitimate
-// is blocked by leaving this permissive. Asserted rather than described, so it
-// cannot be forgotten — and if caturra ever rejects it, this test fails and
-// says to delete itself.
-looser_than_javac!(
+// `Map.Entry.comparingByValue().reversed()` with no witness: the receiver of
+// `reversed()` is no inference context, so the factory is frozen as
+// `Comparator<Entry<Object,V>>` first, and that is not a comparator of the
+// list's entries — javac's wording, in each of the three positions it is
+// written in (`list.sort`, `stream.sorted`, `Collections.sort(list, ...)`).
+differential_wording!(
     entry_comparator_needs_a_witness_to_reverse,
     "LooserEntryReverse",
     r#"
@@ -33725,12 +33717,10 @@ public class WitnessWidening {
 "#
 );
 
-// The SECOND permissiveness. `Collections.emptyList()` types as a `null` that
-// adopts its context, and a CAST is a context — so caturra reads
-// `(List<String>) Collections.emptyList()` as an identity cast, where javac
-// infers `List<Object>` for the bare call and calls the cast inconvertible.
-// Assigning the factory to a `List<String>` first is legal in both.
-looser_than_javac!(
+// A CAST is not an inference context: an empty factory or an argument-free
+// diamond inside one infers `Object`, and a cast to a collection of anything
+// narrower is javac's "List<Object> cannot be converted to List<String>".
+differential_wording!(
     empty_factory_adopts_a_cast_as_its_context,
     "CastAnEmptyList",
     r"
@@ -33742,6 +33732,43 @@ public class CastAnEmptyList {
     }
 }
 "
+);
+
+differential_wording!(
+    a_diamond_in_a_cast_infers_object,
+    "CastADiamond",
+    r"
+import java.util.*;
+
+public class CastADiamond {
+    public static void main(String[] args) {
+        Object o = (Map<String, Integer>) new HashMap<>();
+        System.out.println(o);
+    }
+}
+"
+);
+
+// ...and what a cast of one still accepts: `Object`, `?`, `? super`, raw, a
+// witness, and a diamond whose ARGUMENT says what it holds.
+differential_test!(
+    casts_an_empty_factory_accepts,
+    "CastAcceptsEmpty",
+    r#"
+import java.util.*;
+
+public class CastAcceptsEmpty {
+    public static void main(String[] args) {
+        Object a = (List<Object>) Collections.emptyList();
+        Object b = (List<?>) List.of();
+        Object c = (List<? super String>) Collections.emptyList();
+        Object d = (List) Collections.emptyList();
+        Object e = (List<String>) Collections.<String>emptyList();
+        Object f = (List<String>) new ArrayList<>(List.of("x"));
+        System.out.println(a + " " + b + " " + c + " " + d + " " + e + " " + f);
+    }
+}
+"#
 );
 
 // A witness naming a USER class is checked against the argument too: the
@@ -38099,15 +38126,12 @@ public class RandomStreams {
 "#
 );
 
-// `Collections.sort(new ArrayList<>())` — javac refuses the DIAMOND here
-// ("inferred type does not conform to equality constraint(s)"), where the same
-// call on a written `null` compiles and throws. caturra takes both: a diamond's
-// context-free element is an erased type variable, which the bound check lets
-// through deliberately — an erased variable may well be `Comparable` at the use
-// site, and refusing it would refuse a generic method's own list. The looser
-// direction, and only for a diamond written INLINE: `List<Object> l = new
-// ArrayList<>(); Collections.sort(l);` is refused by both.
-looser_than_javac!(
+// `Collections.sort(new ArrayList<>())`: the only thing to infer the element
+// from is the argument, which makes it `ArrayList<Object>` — and `Object` is
+// not `Comparable`. javac: "no suitable method found for sort(ArrayList<Object>)".
+// (`max`/`min` take `Collection<? extends T>`, which leaves `T` free, and both
+// accept those; a comparator argument also settles it.)
+differential_wording!(
     looser_a_diamond_to_a_bounded_collections_method,
     "SortDiamond",
     r"
@@ -38117,6 +38141,20 @@ import java.util.Collections;
 public class SortDiamond {
     public static void main(String[] args) {
         Collections.sort(new ArrayList<>());
+    }
+}
+"
+);
+
+differential_wording!(
+    sorting_an_empty_factory,
+    "SortEmptyFactory",
+    r"
+import java.util.*;
+
+public class SortEmptyFactory {
+    public static void main(String[] args) {
+        Collections.sort(Collections.emptyList());
     }
 }
 "
@@ -65351,4 +65389,250 @@ public class SubclassIteratorConsumers {
     }
 }
 "##
+);
+
+differential_wording!(
+    entry_comparator_reversed_in_a_stream,
+    "EntryReverseStream",
+    r#"
+import java.util.*;
+
+public class EntryReverseStream {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>(Map.of("a", 1));
+        m.entrySet().stream().sorted(Map.Entry.comparingByValue().reversed()).forEach(System.out::println);
+    }
+}
+"#
+);
+
+differential_wording!(
+    entry_comparator_reversed_for_collections_sort,
+    "EntryReverseCollections",
+    r#"
+import java.util.*;
+
+public class EntryReverseCollections {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>(Map.of("a", 1));
+        List<Map.Entry<String, Integer>> es = new ArrayList<>(m.entrySet());
+        Collections.sort(es, Map.Entry.comparingByKey().reversed());
+    }
+}
+"#
+);
+
+// ...and the spellings that settle it, in both.
+differential_test!(
+    entry_comparator_reversed_with_a_witness,
+    "EntryReverseWitness",
+    r#"
+import java.util.*;
+
+public class EntryReverseWitness {
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>(Map.of("a", 1, "b", 3, "c", 2));
+        List<Map.Entry<String, Integer>> es = new ArrayList<>(m.entrySet());
+        es.sort(Map.Entry.<String, Integer>comparingByValue().reversed());
+        System.out.println(es);
+        es.sort(Collections.reverseOrder(Map.Entry.comparingByKey()));
+        System.out.println(es);
+        es.sort(Map.Entry.comparingByValue(Comparator.reverseOrder()));
+        System.out.println(es);
+        Comparator<Map.Entry<String, Integer>> byValue = Map.Entry.comparingByValue();
+        es.sort(byValue.reversed());
+        System.out.println(es);
+    }
+}
+"#
+);
+
+// A program class may IMPLEMENT a primitive-specialized functional interface
+// (`class Add implements IntBinaryOperator { public int applyAsInt(int, int) }`)
+// — which caturra bundles erased, with `Object` parameters, for its lambdas.
+// The class gets the bridge javac's erasure would imply, the abstract-method
+// check accepts the primitive where the JDK declares one, and a library that
+// calls the object through its erased method finds the bridge. Enum constants
+// implementing one count too.
+differential_test!(
+    a_class_implements_a_primitive_functional_interface,
+    "PrimitiveFunctionalClasses",
+    r##"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class PrimitiveFunctionalClasses {
+    static class Add implements IntBinaryOperator { public int applyAsInt(int a, int b) { return a + b; } }
+    static class Inc implements IntUnaryOperator { public int applyAsInt(int a) { return a + 1; } }
+    static class Even implements IntPredicate { public boolean test(int a) { return a % 2 == 0; } }
+    static class Half implements DoubleUnaryOperator { public double applyAsDouble(double d) { return d / 2; } }
+    static class Say implements IntConsumer { public void accept(int v) { System.out.print("<" + v + ">"); } }
+    static class Label implements IntFunction<String> { public String apply(int v) { return "#" + v; } }
+    static class Len implements ToIntFunction<String> { public int applyAsInt(String s) { return s.length(); } }
+    static class Tagger implements ObjIntConsumer<StringBuilder> { public void accept(StringBuilder sb, int v) { sb.append(v); } }
+    static class Big implements LongBinaryOperator { public long applyAsLong(long a, long b) { return Math.max(a, b); } }
+    enum Op implements IntBinaryOperator {
+        ADD { public int applyAsInt(int a, int b) { return a + b; } },
+        MUL { public int applyAsInt(int a, int b) { return a * b; } };
+    }
+
+    public static void main(String[] args) {
+        IntBinaryOperator add = new Add();
+        System.out.println(new Add().applyAsInt(2, 3) + " " + add.applyAsInt(4, 5) + " " + IntStream.range(1, 5).reduce(0, add));
+        IntUnaryOperator inc = new Inc();
+        System.out.println(inc.applyAsInt(1) + " " + inc.andThen(inc).applyAsInt(1) + " " + IntStream.of(1, 2).map(inc).boxed().collect(Collectors.toList()));
+        IntPredicate even = new Even();
+        System.out.println(even.test(4) + " " + even.negate().test(4) + " " + IntStream.range(0, 7).filter(even).count());
+        System.out.println(new Half().applyAsDouble(5) + " " + DoubleStream.of(2, 4).map(new Half()).sum());
+        IntStream.of(1, 2).forEach(new Say());
+        System.out.println();
+        System.out.println(IntStream.of(3).mapToObj(new Label()).findFirst().get() + " " + Stream.of("ab", "c").mapToInt(new Len()).sum());
+        StringBuilder sb = new StringBuilder();
+        new Tagger().accept(sb, 7);
+        System.out.println(sb + " " + LongStream.of(3, 9, 4).reduce(new Big()).getAsLong());
+        for (Op op : Op.values()) System.out.print(op + "=" + op.applyAsInt(3, 4) + " " + IntStream.of(1, 2, 3).reduce(1, op) + "; ");
+        System.out.println();
+        List<IntBinaryOperator> ops = List.of(new Add(), Op.MUL, (a, b) -> a - b);
+        for (IntBinaryOperator o : ops) System.out.print(o.applyAsInt(6, 2) + " ");
+        System.out.println();
+    }
+}
+"##
+);
+
+// A grab-bag of legal Java 11 no fuzzer generates: a private and a static
+// interface method, enum constants with bodies implementing an interface,
+// static and instance initializer order, labeled break/continue, the Integer
+// cache, char arithmetic, a string switch that falls through, a ragged array,
+// integer overflow and division signs, StringBuilder chains, split edge
+// cases, hash codes, and the ClassCastException wording.
+differential_test!(
+    less_common_java_compiles_and_runs,
+    "LessCommonJava",
+    r##"
+import java.util.*;
+import java.util.function.*;
+
+public class LessCommonJava {
+    interface Shape {
+        double area();
+        default String describe() { return name() + " " + fmt(area()); }
+        String name();
+        private String fmt(double d) { return String.format("%.2f", d); }
+        static Shape unit() { return new Square(1); }
+    }
+    static final class Square implements Shape {
+        private final double side;
+        Square(double side) { this.side = side; }
+        public double area() { return side * side; }
+        public String name() { return "square"; }
+    }
+    enum Op implements IntBinaryOperator {
+        ADD("+") { public int applyAsInt(int a, int b) { return a + b; } },
+        MUL("*") { public int applyAsInt(int a, int b) { return a * b; } };
+        final String sym;
+        Op(String sym) { this.sym = sym; }
+    }
+    static int counter;
+    static { counter = 10; }
+    int inst;
+    { inst = counter++; }
+
+    static <T extends Comparable<T>> T maxOf(List<T> xs) {
+        T best = xs.get(0);
+        for (T x : xs) if (x.compareTo(best) > 0) best = x;
+        return best;
+    }
+
+    public static void main(String[] args) throws Exception {
+        System.out.println(Shape.unit().describe());
+        for (Op op : Op.values()) System.out.print(op + op.sym + op.applyAsInt(3, 4) + " " + op.getClass() + " " + op.getDeclaringClass() + "; ");
+        System.out.println();
+        System.out.println(new LessCommonJava().inst + " " + new LessCommonJava().inst + " " + counter);
+        outer:
+        for (int i = 0; i < 3; i++) {
+            for (int j = 0; j < 3; j++) {
+                if (j == 2) continue outer;
+                if (i == 2) break outer;
+                System.out.print(i + "" + j + " ");
+            }
+        }
+        System.out.println();
+        Integer a = 127, b = 127, c = 128, d = 128;
+        System.out.println((a == b) + " " + (c == d) + " " + c.equals(d));
+        char ch = 'a'; ch += 2; ch++;
+        System.out.println(ch + " " + (int) ch + " " + (char) (ch + 1) + " " + ('a' + 'b') + " " + (char) 65);
+        String s = "b";
+        switch (s) {
+            case "a": System.out.print("A");
+            case "b": System.out.print("B");
+            case "c": System.out.print("C"); break;
+            default: System.out.print("D");
+        }
+        System.out.println();
+        System.out.println(maxOf(Arrays.asList(3, 9, 2)) + " " + maxOf(List.of("pear", "apple")));
+        int[][] grid = new int[3][];
+        grid[0] = new int[] {1}; grid[1] = new int[] {1, 2}; grid[2] = new int[0];
+        System.out.println(Arrays.deepToString(grid) + " " + grid[1].length);
+        long big = Integer.MAX_VALUE + 1L; int wrap = Integer.MAX_VALUE + 1;
+        System.out.println(big + " " + wrap + " " + (5 / 2) + " " + (-5 / 2) + " " + (-5 % 2) + " " + (5.0 / 0) + " " + Math.floorMod(-5, 2));
+        StringBuilder sb = new StringBuilder("hello");
+        sb.insert(0, '[').append(']').reverse().setCharAt(0, '<');
+        System.out.println(sb + " " + sb.indexOf("l") + " " + "a,b,,c,".split(",").length + " " + Arrays.toString("a1b22c".split("\\d+")));
+        Object o = new int[] {1, 2};
+        if (o instanceof int[]) System.out.println("int array " + ((int[]) o).length);
+        BiFunction<Integer, Integer, Integer> add = Integer::sum;
+        Function<Integer, Integer> twice = add.andThen(x -> x * 2).apply(1, 2) > 5 ? x -> x : x -> x * 2;
+        System.out.println(twice.apply(5) + " " + Function.<Integer>identity().compose((Integer x) -> x + 1).apply(1));
+        var list = new ArrayList<Map<String, List<Integer>>>();
+        list.add(new TreeMap<>(Map.of("k", List.of(1, 2))));
+        for (var entry : list.get(0).entrySet()) System.out.println(entry.getKey() + entry.getValue());
+        System.out.println(Objects.hash(1, "a") + " " + Arrays.hashCode(new int[] {1, 2}) + " " + "abc".hashCode() + " " + Boolean.hashCode(true) + " " + Double.hashCode(1.5));
+        try { Object x = "s"; Integer i = (Integer) x; } catch (ClassCastException e) { System.out.println(e.getMessage()); }
+        System.out.println(String.valueOf((Object) null) + " " + ("" + null) + " " + Objects.requireNonNullElse(null, "d"));
+    }
+}
+"##
+);
+
+// Function COMBINATORS keep their types: `f.andThen(g)` answers what `g`
+// answers (and a chain of them), `compose` what `f` answers, a `BiFunction`'s
+// `andThen` likewise, and `Function.<T>identity()` is a function of its
+// witness. Lambdas written as the ELEMENTS of `List.of`/`Set.of`/
+// `Arrays.asList`/`Map.of` take the element the declaration names.
+differential_test!(
+    function_combinators_and_factory_lambdas,
+    "CombinatorTypes",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class CombinatorTypes {
+    public static void main(String[] args) {
+        Function<Integer, Integer> inc = x -> x + 1;
+        int a = inc.andThen(x -> x * 10).apply(1);
+        Function<Integer, Integer> chain = inc.andThen(x -> x * 2).andThen(x -> x - 3);
+        Function<String, Integer> len = String::length;
+        String rep = len.andThen(n -> n * 2).andThen(n -> "x".repeat(n)).apply("ab");
+        BiFunction<Integer, Integer, Integer> add = Integer::sum;
+        int b = add.andThen(x -> x * 2).apply(1, 2);
+        String c = add.andThen(x -> x * 2).andThen(x -> "=" + x).apply(1, 2);
+        int d = Function.<Integer>identity().compose((Integer x) -> x + 1).apply(1);
+        UnaryOperator<String> up = String::toUpperCase;
+        System.out.println(a + " " + chain.apply(4) + " " + rep + " " + b + " " + c + " " + d + " " + up.andThen(s -> s + "!").apply("hi").length());
+        List<Function<Integer, Integer>> steps = List.of(x -> x + 1, x -> x * 2);
+        int acc = 3;
+        for (Function<Integer, Integer> step : steps) {
+            acc = step.apply(acc);
+        }
+        List<Runnable> runs = Arrays.asList(() -> System.out.print("r1 "), () -> System.out.print("r2 "));
+        runs.forEach(Runnable::run);
+        Map<String, Supplier<Integer>> lazy = Map.of("one", () -> 1);
+        Set<Predicate<String>> tests = Set.of(String::isEmpty);
+        List<IntBinaryOperator> ops = List.of((x, y) -> x - y, Math::max);
+        System.out.println(acc + " " + lazy.get("one").get() + " " + tests.iterator().next().test("") + " " + ops.get(0).applyAsInt(5, 2) + " " + ops.get(1).applyAsInt(5, 2));
+    }
+}
+"#
 );

@@ -1163,6 +1163,30 @@ fn self_described_predicate(arg: &Expr, ctx: &Ctx) -> Option<TypeRef> {
 fn functional_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     match expr {
         Expr::Name { path, .. } if path.len() == 1 => ctx.lookup(&path[0]),
+        // `Function.identity()` / `UnaryOperator.identity()`: a function of
+        // its witness onto itself, or of `Object` without one.
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            type_args,
+            ..
+        } if method == "identity"
+            && args.is_empty()
+            && matches!(owner.as_ref(), Expr::Name { path, .. }
+                if path.len() == 1
+                    && matches!(path[0].as_str(), "Function" | "UnaryOperator")
+                    && ctx.lookup(&path[0]).is_none()) =>
+        {
+            let element = type_args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| TypeRef::Named(String::from("Object")));
+            Some(TypeRef::Generic {
+                base: String::from("Function"),
+                args: vec![element.clone(), element],
+            })
+        }
         Expr::Call {
             receiver: Some(inner),
             method,
@@ -1172,6 +1196,55 @@ fn functional_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
             if is_negated_predicate(expr) {
                 return functional_type_of(&args[0], ctx)
                     .or_else(|| self_described_predicate(&args[0], ctx));
+            }
+            // A function COMBINATOR is a function too: `f.andThen(g)` takes
+            // what `f` takes and answers what `g` answers (a lambda there was
+            // already desugared, and its class says what it produces), and
+            // `f.compose(g)` answers what `f` answers. Without it the lambda
+            // in a CHAINED `.andThen(x -> …)` had no position.
+            if matches!(method.as_str(), "andThen" | "compose")
+                && let [after] = &args[..]
+                && let Some(TypeRef::Generic {
+                    base,
+                    args: inner_args,
+                }) = functional_type_of(inner, ctx)
+                && matches!(
+                    simple_base(&base),
+                    "Function" | "UnaryOperator" | "BiFunction" | "BinaryOperator"
+                )
+            {
+                let two_inputs = matches!(simple_base(&base), "BiFunction" | "BinaryOperator");
+                let inputs: Vec<TypeRef> = match simple_base(&base) {
+                    "UnaryOperator" => vec![inner_args.first()?.clone()],
+                    "BinaryOperator" => vec![inner_args.first()?.clone(); 2],
+                    _ => inner_args[..inner_args.len().saturating_sub(1)].to_vec(),
+                };
+                if method == "compose" {
+                    let answer = inner_args.last()?.clone();
+                    return (!two_inputs).then(|| TypeRef::Generic {
+                        base: String::from("Function"),
+                        args: vec![TypeRef::Named(String::from("Object")), answer],
+                    });
+                }
+                let produced = match after {
+                    Expr::NewObject { class, .. } => ctx
+                        .new_classes
+                        .iter()
+                        .find(|decl| decl.name == *class)
+                        .and_then(|decl| produced_type(decl, ctx)),
+                    other => match functional_type_of(other, ctx) {
+                        Some(TypeRef::Generic {
+                            args: after_args, ..
+                        }) => after_args.last().cloned(),
+                        _ => None,
+                    },
+                }?;
+                let mut combined = inputs;
+                combined.push(produced);
+                return Some(TypeRef::Generic {
+                    base: String::from(if two_inputs { "BiFunction" } else { "Function" }),
+                    args: combined,
+                });
             }
             // `Predicate.not(p)` before the rewrite: the same predicate as `p`,
             // so a combinator chained onto it (`Predicate.not(String::isEmpty)
@@ -1225,7 +1298,18 @@ fn combinator_argument_type(
     if arity != 1 {
         return None;
     }
-    let receiver_ty = functional_type_of(receiver, ctx)?;
+    combinator_argument_type_of(functional_type_of(receiver, ctx)?, method, arity)
+}
+
+/// [`combinator_argument_type`], from the receiver's functional type.
+fn combinator_argument_type_of(
+    receiver_ty: TypeRef,
+    method: &str,
+    arity: usize,
+) -> Option<TypeRef> {
+    if arity != 1 {
+        return None;
+    }
     // The PRIMITIVE specializations take no type arguments, so their
     // combinators are the simplest case of all: `IntPredicate.and`,
     // `IntConsumer.andThen` and `IntUnaryOperator.andThen`/`compose` each take
@@ -2940,6 +3024,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
         method,
         args,
         span,
+        type_args,
         ..
     } = expr
         && method == "identity"
@@ -2952,6 +3037,8 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 | "IntUnaryOperator" | "LongUnaryOperator" | "DoubleUnaryOperator")))
     {
         let span = *span;
+        // A WITNESS (`Function.<Integer>identity()`) is what it maps.
+        let witnessed = type_args.first().cloned();
         // `IntUnaryOperator.identity().applyAsInt(7)` — an identity used
         // STRAIGHT, with no variable to read a target type from. The owner
         // names the interface, so the arm supplies the target itself rather
@@ -2962,7 +3049,11 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             && let Expr::Name { path, .. } = owner.as_ref()
             && let Some(simple) = path.last()
         {
-            let object = || TypeRef::Named(String::from("Object"));
+            let object = || {
+                witnessed
+                    .clone()
+                    .unwrap_or_else(|| TypeRef::Named(String::from("Object")))
+            };
             identity_target = Some(match simple.as_str() {
                 "Function" => TypeRef::Generic {
                     base: String::from("Function"),
@@ -3342,6 +3433,10 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 );
                 return;
             }
+            // The receiver's functional type as WRITTEN, before its own
+            // desugaring rewrites it — `Function.<Integer>identity()` becomes a
+            // lambda class that no longer says what it maps.
+            let written_functional = receiver.as_deref().and_then(|r| functional_type_of(r, ctx));
             if let Some(r) = receiver {
                 desugar_expr(r, None, ctx);
             }
@@ -4393,9 +4488,42 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             if let Some(target) = receiver
                 .as_deref()
                 .and_then(|r| combinator_argument_type(r, method, args.len(), ctx))
+                .or_else(|| {
+                    written_functional
+                        .clone()
+                        .and_then(|ty| combinator_argument_type_of(ty, method, args.len()))
+                })
             {
                 for arg in args.iter_mut() {
                     desugar_expr(arg, Some(&target), ctx);
+                }
+                return;
+            }
+            // A lambda written as an ELEMENT of an immutable factory —
+            // `List<Function<Integer, Integer>> fs = List.of(x -> x + 1, …)`,
+            // `Map.of("a", () -> 1)` — is target-typed by the element the
+            // declaration names, which is all javac has to go on too.
+            if let Some(TypeRef::Generic { args: written, .. }) = expected
+                && let Some(Expr::Name { path, .. }) = receiver.as_deref()
+                && path.len() == 1
+                && ctx.lookup(&path[0]).is_none()
+                && matches!(
+                    (path[0].as_str(), method.as_str()),
+                    ("List" | "Set" | "Stream" | "Map", "of") | ("Arrays", "asList")
+                )
+                && args
+                    .iter()
+                    .any(|arg| matches!(arg, Expr::Lambda { .. } | Expr::MethodRef { .. }))
+            {
+                let written = written.clone();
+                let is_map = path[0] == "Map";
+                for (index, arg) in args.iter_mut().enumerate() {
+                    let element = if is_map {
+                        written.get(index % 2)
+                    } else {
+                        written.first()
+                    };
+                    desugar_expr(arg, element, ctx);
                 }
                 return;
             }

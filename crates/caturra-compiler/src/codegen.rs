@@ -3257,13 +3257,29 @@ impl MethodTable {
                     && subst.len() == 1
                     && subst[0] != JType::Object(self.object_id))
                 .then(|| subst[0]);
+                // ...but only in the positions the JDK declares with that
+                // variable: `IntFunction<R>`'s argument is its RESULT (its
+                // parameter is an `int`), and `ObjIntConsumer<T>`'s is its
+                // first parameter alone.
+                let stand_in_at: Option<&[usize]> = match self.class_name(id) {
+                    "__IntFunction" | "__LongFunction" | "__DoubleFunction" => Some(&[]),
+                    "__ObjIntConsumer" | "__ObjLongConsumer" | "__ObjDoubleConsumer" => Some(&[0]),
+                    _ => None,
+                };
                 for m in &info.methods {
                     if m.is_abstract {
                         let params = m
                             .params
                             .iter()
-                            .map(|p| match (erased_stand_in, p) {
-                                (Some(arg), JType::Object(oid)) if *oid == self.object_id => arg,
+                            .enumerate()
+                            .map(|(at, p)| match (erased_stand_in, p) {
+                                (Some(arg), JType::Object(oid))
+                                    if *oid == self.object_id
+                                        && stand_in_at
+                                            .is_none_or(|positions| positions.contains(&at)) =>
+                                {
+                                    arg
+                                }
                                 _ => Self::substitute_type_var(*p, &subst),
                             })
                             .collect();
@@ -3509,16 +3525,25 @@ impl MethodTable {
             return false;
         }
         let written = self.generic_supertype_arg(subclass, owner);
-        let erased_interface = self.class_name(owner).starts_with("__");
+        let owner_name = self.class_name(owner);
+        let erased_interface = owner_name.starts_with("__");
         let object = JType::Object(self.object_id);
-        declared.iter().zip(overriding).all(|(sup, sub)| {
-            sup == sub
+        declared
+            .iter()
+            .zip(overriding)
+            .enumerate()
+            .all(|(at, (sup, sub))| {
+                sup == sub
                 || matches!(sup, JType::TypeVar(_))
                 || (erased_interface && *sup == object && sub.is_reference())
+                // A primitive where the JDK's own declaration has one
+                // (`IntBinaryOperator.applyAsInt(int, int)`), which the
+                // bundled erasure writes as `Object`.
+                || (*sup == object && bundled_primitive_param(owner_name, at) == Some(*sub))
                 || (*sup != object
                     && written.is_some_and(|arg| arg.base_type() == *sub)
                     && widens(*sub, *sup, self))
-        })
+            })
     }
 
     pub(crate) fn has_class(&self, name: &str) -> bool {
@@ -7209,6 +7234,130 @@ fn member_label(decl: &MethodDecl, class_name: &str) -> String {
         format!("constructor {owner}({params})")
     } else {
         format!("method {}({params})", decl.name)
+    }
+}
+
+/// `Map.Entry.comparingByValue().reversed()` (or `comparingByKey`) with no
+/// witness: the comparator the factory is FROZEN as before `reversed()`, as
+/// javac names it — `Comparator<Entry<Object,V>>` (`<Entry<K,Object>>`).
+fn frozen_entry_comparator(expr: &Expr) -> Option<&'static str> {
+    let Expr::Call {
+        receiver: Some(inner),
+        method,
+        args,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    if method != "reversed" || !args.is_empty() {
+        return None;
+    }
+    let Expr::Call {
+        receiver: Some(owner),
+        method: factory,
+        args: factory_args,
+        type_args,
+        ..
+    } = inner.as_ref()
+    else {
+        return None;
+    };
+    if !factory_args.is_empty()
+        || !type_args.is_empty()
+        || !matches!(owner.as_ref(), Expr::Name { path, .. } if path.last().is_some_and(|n| n == "Entry"))
+    {
+        return None;
+    }
+    match factory.as_str() {
+        "comparingByValue" => Some("Comparator<Entry<Object,V>>"),
+        "comparingByKey" => Some("Comparator<Entry<K,Object>>"),
+        _ => None,
+    }
+}
+
+/// An expression whose type arguments come ONLY from its context: an
+/// argument-free empty factory (`Collections.emptyList()`, `List.of()`,
+/// `Optional.empty()`, `Stream.empty()`, `Arrays.asList()`) or diamond
+/// (`new ArrayList<>()`). The generic class it makes, and how many arguments.
+fn context_free_generic(expr: &Expr) -> Option<(&'static str, usize)> {
+    match expr {
+        Expr::NewObject {
+            class,
+            type_args,
+            args,
+            raw: false,
+            ..
+        } if type_args.is_empty() && args.is_empty() => {
+            let simple = class.strip_prefix("java.util.").unwrap_or(class);
+            let arity = match simple {
+                "ArrayList" | "LinkedList" | "HashSet" | "LinkedHashSet" | "TreeSet"
+                | "ArrayDeque" | "PriorityQueue" | "Stack" | "Vector" => 1,
+                "HashMap" | "LinkedHashMap" | "TreeMap" | "Hashtable" => 2,
+                _ => return None,
+            };
+            let named = EXTENDABLE_COLLECTIONS
+                .iter()
+                .chain(&["Vector", "Hashtable"])
+                .find(|known| **known == simple)?;
+            Some((named, arity))
+        }
+        Expr::Call {
+            receiver: Some(owner),
+            method,
+            args,
+            type_args,
+            ..
+        } if args.is_empty() && type_args.is_empty() => {
+            let Expr::Name { path, .. } = owner.as_ref() else {
+                return None;
+            };
+            match (path.last()?.as_str(), method.as_str()) {
+                ("Collections", "emptyList") | ("List", "of") | ("Arrays", "asList") => {
+                    Some(("List", 1))
+                }
+                ("Collections", "emptySet") | ("Set", "of") => Some(("Set", 1)),
+                ("Collections", "emptyMap") | ("Map", "of") => Some(("Map", 2)),
+                ("Optional", "empty") => Some(("Optional", 1)),
+                ("Stream", "empty") => Some(("Stream", 1)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A type argument an `Object` argument is not: a concrete type other than
+/// `Object`, or `? extends` one. (`?`, `? super T` and `Object` accept it.)
+fn narrower_than_object(arg: &TypeRef) -> bool {
+    match arg {
+        TypeRef::Named(name) => match crate::ast::wildcard_parts(name) {
+            Some(('+', bound)) => bound != "Object",
+            Some(_) => false,
+            None => name != "Object" && name != "java.lang.Object",
+        },
+        _ => true,
+    }
+}
+
+/// A type as javac prints it in a message, wildcards included.
+fn javac_type_name(ty: &TypeRef) -> String {
+    match ty {
+        TypeRef::Named(name) => match crate::ast::wildcard_parts(name) {
+            Some(('?', _)) => String::from("?"),
+            Some(('+', bound)) => format!("? extends {bound}"),
+            Some(('-', bound)) => format!("? super {bound}"),
+            _ => written_type_name(ty),
+        },
+        TypeRef::Generic { base, args } => format!(
+            "{}<{}>",
+            source_interface_name(base),
+            args.iter()
+                .map(javac_type_name)
+                .collect::<Vec<_>>()
+                .join(",")
+        ),
+        _ => written_type_name(ty),
     }
 }
 
@@ -12004,6 +12153,42 @@ fn is_cloneable_collection(ty: JType) -> bool {
                 ..
             }
     )
+}
+
+/// The primitive a bundled primitive-specialized functional interface's
+/// parameter really is at `at` — `__IntBinaryOperator` stands for
+/// `applyAsInt(int, int)`, `__ObjIntConsumer` for `accept(T, int)`.
+fn bundled_primitive_param(interface: &str, at: usize) -> Option<JType> {
+    let family = |prefix: &str| {
+        matches!(
+            interface.strip_prefix(prefix),
+            Some(
+                "UnaryOperator"
+                    | "BinaryOperator"
+                    | "Predicate"
+                    | "Consumer"
+                    | "Function"
+                    | "ToLongFunction"
+                    | "ToDoubleFunction"
+                    | "ToIntFunction"
+            )
+        )
+    };
+    if family("__Int") {
+        return Some(JType::Int);
+    }
+    if family("__Long") {
+        return Some(JType::Long);
+    }
+    if family("__Double") {
+        return Some(JType::Double);
+    }
+    match (interface, at) {
+        ("__ObjIntConsumer", 1) => Some(JType::Int),
+        ("__ObjLongConsumer", 1) => Some(JType::Long),
+        ("__ObjDoubleConsumer", 1) => Some(JType::Double),
+        _ => None,
+    }
 }
 
 /// Whether a builtin collection type has a member taking these arguments.
@@ -31596,6 +31781,59 @@ impl BodyGen<'_> {
             .is_some_and(|owner| owner != self.table.class_name(self.table.object_id))
     }
 
+    /// The type of a function COMBINATOR's result. A function is carried as
+    /// the class of its erased interface and the one argument that is its
+    /// RESULT (`Function<Integer, String>` is `UnaryOperator<String>` here),
+    /// so `f.andThen(g)` is that class with `g`'s result, `f.compose(g)` is
+    /// `f`'s own type, and `bi.andThen(g)` a `BiFunction` with `g`'s result.
+    fn combined_function_type(
+        &mut self,
+        receiver: JType,
+        method: &str,
+        args: &[Expr],
+    ) -> Option<JType> {
+        // A LAMBDA written as the receiver (`Function.<Integer>identity()`
+        // becomes one) is the erased interface it implements, answering what
+        // its body produces.
+        let receiver = match receiver {
+            JType::Object(lambda) if crate::is_lambda_class(self.table.class_name(lambda)) => {
+                let produced = lambda_produces(receiver, self.table)?;
+                let class = ["__UnaryOperator", "__BiFunction"]
+                    .iter()
+                    .filter_map(|name| self.table.class_id(name))
+                    .find(|id| self.table.is_subtype(lambda, *id))?;
+                JType::Generic {
+                    class,
+                    arg: self.holdable_elem(produced)?,
+                    rest: NO_TYPE_ARGS,
+                }
+            }
+            other => other,
+        };
+        let JType::Generic { class, .. } = receiver else {
+            return None;
+        };
+        let [after] = args else {
+            return None;
+        };
+        let name = self.table.class_name(class);
+        match (name, method) {
+            ("__UnaryOperator", "compose") => Some(receiver),
+            ("__UnaryOperator" | "__BiFunction", "andThen") => {
+                let after_ty = self.type_of(after);
+                let produced = lambda_produces(after_ty, self.table)
+                    .or_else(|| functional_value_produces(after_ty, self.table))?;
+                let elem = self.holdable_elem(produced)?;
+                Some(JType::Generic {
+                    class,
+                    arg: elem,
+                    rest: NO_TYPE_ARGS,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// `super(args)` in a class that extends a builtin collection. The
     /// constructor is chosen, and its arguments checked and converted, by the
     /// same code that compiles `new ArrayList<Card>(args)`; that code begins
@@ -36037,6 +36275,19 @@ impl BodyGen<'_> {
         {
             return self.emit_iterable_for_each(method, args, span);
         }
+        // A combinator called straight on a LAMBDA (`Function.<Integer>
+        // identity().compose(…)`) is typed like one on a function variable.
+        if let JType::Object(lambda) = receiver_ty
+            && matches!(method, "andThen" | "compose")
+            && crate::is_lambda_class(self.table.class_name(lambda))
+        {
+            let emitted = self.emit_virtual_call_on_stacked_receiver(lambda, method, args, span)?;
+            return Some(
+                self.combined_function_type(receiver_ty, method, args)
+                    .map(Some)
+                    .unwrap_or(emitted),
+            );
+        }
         let class_id = match receiver_ty {
             JType::Object(id) => id,
             // A parameterized receiver: dispatch on the erased class,
@@ -36047,6 +36298,12 @@ impl BodyGen<'_> {
                 let result = self.emit_virtual_call_on_stacked_receiver(class, method, args, span);
                 self.receiver_args = outer;
                 let result = result?;
+                // `f.andThen(g)` / `f.compose(g)` / `bi.andThen(g)`: the
+                // bundled defaults answer an erased function, and the type
+                // the program is owed is built from the two it combined.
+                if let Some(combined) = self.combined_function_type(receiver_ty, method, args) {
+                    return Some(Some(combined));
+                }
                 return Some(result.map(|ret| {
                     let ret = self.substitute_type_var(ret, arg, rest);
                     substitute_member_type(ret, arg, rest, self.table)
@@ -36555,6 +36812,30 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // `list.sort(Map.Entry.comparingByValue().reversed())`: the receiver of
+        // `reversed()` is no inference context, so the factory's variables
+        // are fixed on their own — `Comparator<Entry<Object,V>>` — before
+        // `reversed()` hands it on, and that is not a comparator of the list's
+        // entries. javac refuses it; a witness or a typed variable settles it.
+        if matches!(
+            (method, receiver_ty),
+            (
+                "sort",
+                JType::List { .. } | JType::LinkedList { .. } | JType::Stack(_)
+            ) | ("sorted", JType::Stream(_))
+        ) && let [only] = args
+            && let Some(frozen) = frozen_entry_comparator(only)
+            && let Some(elem) = TypeArgs::of(receiver_ty).first
+        {
+            let wanted = elem_value_type(elem, self.table).describe(self.table);
+            self.error(
+                only.span(),
+                format!(
+                    "incompatible types: {frozen} cannot be converted to Comparator<? super {wanted}>"
+                ),
+            );
+            return None;
+        }
         // The three primitive pipelines share one method table, so the table
         // alone would let a `DoubleStream` answer `asDoubleStream()`.
         if !numeric_stream_conversion(receiver_ty, method) {
@@ -40803,6 +41084,39 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> Option<Option<JType>> {
+        // `sort(List<T>)` with `T extends Comparable<? super T>` and nothing
+        // but the argument to infer from: an empty factory or an argument-free
+        // diamond makes that `List<Object>`, and `Object` is not `Comparable`.
+        // (`max`/`min` take `Collection<? extends T>`, which leaves `T` free —
+        // javac accepts those.)
+        // ...and `sort(list, Map.Entry.comparingByValue().reversed())`, whose
+        // comparator is frozen before `reversed()` (see
+        // `frozen_entry_comparator`) — javac numbers the variable here.
+        if method == "sort"
+            && let [list, comparator] = args
+            && let Some(frozen) = frozen_entry_comparator(comparator)
+        {
+            let list_ty = self.type_of(list).describe(self.table);
+            let numbered = frozen.replace("V>", "V#1>").replace("<K,", "<K#1,");
+            self.error(
+                span,
+                format!("no suitable method found for sort({list_ty},{numbered})"),
+            );
+            return None;
+        }
+        if method == "sort"
+            && let [only] = args
+            && let Some((inferred, arity)) = context_free_generic(only)
+        {
+            self.error(
+                span,
+                format!(
+                    "no suitable method found for sort({inferred}<{}>)",
+                    vec!["Object"; arity].join(",")
+                ),
+            );
+            return None;
+        }
         // `emptyList()` has no arguments at all. Its element type comes from
         // whatever it is assigned to, so it types as `null` does: assignable
         // to any list.
@@ -44292,6 +44606,15 @@ impl BodyGen<'_> {
                                 _ => answer,
                             };
                         }
+                        // A combinator on a LAMBDA, as `instance_call` types it.
+                        receiver_ty @ JType::Object(lambda)
+                            if matches!(method.as_str(), "andThen" | "compose")
+                                && crate::is_lambda_class(self.table.class_name(lambda))
+                                && let Some(combined) =
+                                    self.combined_function_type(receiver_ty, method, args) =>
+                        {
+                            return combined;
+                        }
                         JType::Object(id) => self.table.class_name(id).to_owned(),
                         // `stream.collect(collector)` — the result comes from
                         // the COLLECTOR, exactly as `instance_call` reads it
@@ -44318,6 +44641,13 @@ impl BodyGen<'_> {
                         // seen as a string concatenation, and the whole
                         // `println` silently produced NOTHING.
                         JType::Generic { class, arg, rest } => {
+                            if let Some(combined) = self.combined_function_type(
+                                JType::Generic { class, arg, rest },
+                                method,
+                                args,
+                            ) {
+                                return combined;
+                            }
                             let class_name = self.table.class_name(class).to_owned();
                             let arg_types: Vec<JType> =
                                 args.iter().map(|a| self.type_of(a)).collect();
@@ -47221,6 +47551,24 @@ impl BodyGen<'_> {
         let source = self.expr(operand);
         if source == JType::Error {
             self.error_bail(span, "cast operand");
+            return JType::Error;
+        }
+        // A CAST is not an inference context. An empty factory or an
+        // argument-free diamond infers `Object` for what it holds, so casting
+        // it to a list OF something narrower is javac's "List<Object> cannot
+        // be converted to List<String>" — where assigning it is fine.
+        if let Some((inferred, arity)) = context_free_generic(operand)
+            && let TypeRef::Generic { args, .. } = ty
+            && args.iter().any(narrower_than_object)
+        {
+            self.error(
+                span,
+                format!(
+                    "incompatible types: {inferred}<{}> cannot be converted to {}",
+                    vec!["Object"; arity].join(","),
+                    javac_type_name(ty)
+                ),
+            );
             return JType::Error;
         }
         // JLS §5.5, asked ONCE, before any target family gets a say: the two

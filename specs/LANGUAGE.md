@@ -9150,23 +9150,6 @@ counting catches: a divergence that stopped being one.
   Locale.FRANCE)`. caturra ships one text, en-US, and answering a French
   program in English would be a WRONG answer rather than a missing one — so the
   locale is checked where it is written. (`stricter_a_locale_that_is_not_english`)
-- `Map.Entry.comparingByValue().reversed()` with no type witness. javac
-  infers `Comparator<Entry<Object, V>>` for the bare factory call, and
-  `.reversed()` freezes that before the target type can correct it, so javac
-  demands `Map.Entry.<K, V>comparingByValue()`, a typed variable, or a
-  wrapper like `Collections.reverseOrder(...)`. A call now CARRIES its witness
-  (see **Explicit type witnesses**), so the two spellings are no longer the
-  same tree — but caturra's generics are erased, and it is the ABSENCE of a
-  witness that javac makes fatal here, which is a rule about inference this
-  engine does not model. All three forms javac accepts do work, so nothing
-  legitimate is blocked by leaving it permissive. Recorded when the two
-  factories were added (2026-08-14) rather than left for a later sweep to
-  find. (`entry_comparator_needs_a_witness_to_reverse`)
-- `(List<String>) Collections.emptyList()`. The factory types as a `null` that
-  adopts its context, and a CAST is a context — so caturra reads this as an
-  identity cast, where javac infers `List<Object>` for the bare call and calls
-  the cast inconvertible. Assigning the factory to a `List<String>` first is
-  legal in both, and is the ordinary spelling. (`empty_factory_adopts_a_cast_as_its_context`)
 - `Math.max(apply("ab", s -> s.charAt(0)), 1)` for a `<T, R> R apply(T,
   Function<T, R>)`. A type variable that only an implicitly typed lambda pins
   is fixed by the call's TARGET first; in an assignment caturra does that
@@ -9175,16 +9158,6 @@ counting catches: a divergence that stopped being one.
   its `Character` unbox into whichever overload fits.
   (`an_inferred_variable_in_an_invocation_context`)
 
-- `Collections.sort(new ArrayList<>())` — javac refuses the DIAMOND here
-  ("inferred type does not conform to equality constraint(s)") and compiles the
-  same call on a written `null`, which throws at run time. caturra takes both:
-  a diamond's context-free element is an erased type VARIABLE, which the
-  `T extends Comparable<? super T>` check lets through deliberately, since an
-  erased variable may well be Comparable at the use site. Only a diamond
-  written INLINE differs — `List<Object> l = new ArrayList<>();
-  Collections.sort(l);` is refused by both. This was the stricter direction
-  until 2026-09-23, when a written `null` started compiling as javac compiles
-  it. (`looser_a_diamond_to_a_bounded_collections_method`)
 - `Optional<ArrayList<Pet>>` assigned to an `Optional<List<Pet>>` between two
   declared VARIABLES. Generics are invariant and javac refuses it; caturra's
   rule — the value written as the class where the variable says the interface
@@ -12551,6 +12524,96 @@ Pinned by `an_inner_class_in_a_static_context`,
 `an_inner_class_from_another_class`, `reject_a_double_switch_selector`,
 `reject_an_object_switch_selector`, `reject_a_break_outside_a_loop`,
 `reject_a_continue_outside_a_loop` and `the_switches_a_lesson_writes`.
+
+### A class that implements a primitive functional interface (2026-09-27)
+
+`class Add implements IntBinaryOperator { public int applyAsInt(int a, int b) }`
+was refused — "does not override abstract method applyAsInt(Object,Object)" —
+for all twenty-odd primitive-specialized interfaces (`IntPredicate`,
+`DoubleUnaryOperator`, `IntConsumer`, `IntFunction<R>`, `ObjIntConsumer<T>`,
+...), and so was an `enum Op implements IntBinaryOperator` whose constants
+each declare `applyAsInt`. Lambdas were fine: caturra bundles these interfaces
+ERASED (`__IntBinaryOperator { int applyAsInt(Object, Object); }`), which is
+the protocol its lambda classes are built to.
+
+A program class now meets the erased interface three ways. The bridges pass
+finds the bundled interface behind the JDK name (through the class's own
+`implements` or a superclass's) and writes the bridge erasure implies —
+`applyAsInt(Object, Object) { return applyAsInt((int) a, (int) b); }`. The
+abstract-method check accepts a primitive exactly where the JDK declares one
+(`bundled_primitive_param`), and reads a single type argument as a PARAMETER
+only where it is one — `IntFunction<R>`'s is its result, `ObjIntConsumer<T>`'s
+its first parameter alone. And a library that calls the object by the name
+its lambda protocol uses (`IntStream.reduce` asks for `apply`) finds the
+erased method instead (`erased_functional_method`). Pinned by
+`a_class_implements_a_primitive_functional_interface`.
+
+### Function combinators and lambdas as elements (2026-09-27)
+
+Found by a grab-bag probe of legal Java no fuzzer writes. A `Function` is
+carried as its erased interface plus the one argument that is its RESULT
+(`Function<Integer, String>` is `UnaryOperator<String>` here), and the
+bundled `andThen`/`compose` defaults answer the bare erased interface — so
+`f.andThen(x -> x * 10).apply(1)` typed as `T` ("cannot be converted to int",
+"bad operand types"). `combined_function_type` now builds the result from the
+two functions combined: `f.andThen(g)` is `g`'s result, `f.compose(g)` is
+`f`'s own type, `bi.andThen(g)` a `BiFunction` answering `g`'s result — in the
+emit path and its `type_of` mirror. The lambda pass reads a combinator CALL
+as a function too (`functional_type_of`), so the lambda in a CHAINED
+`.andThen(x -> …)` has a position, and it reads a receiver's type before that
+receiver is desugared, so `Function.<Integer>identity().compose(...)` keeps
+its witness.
+
+A lambda written as an ELEMENT of `List.of`/`Set.of`/`Stream.of`/
+`Arrays.asList`/`Map.of` — `List<Function<Integer, Integer>> steps =
+List.of(x -> x + 1, x -> x * 2)`, a map of `Supplier`s — is target-typed by the
+element the declaration names (each value position of `Map.of` by the value
+type), which is what javac infers from as well. Pinned by
+`function_combinators_and_factory_lambdas`.
+
+### A cast is not an inference context (2026-09-27)
+
+`(List<String>) Collections.emptyList()` compiled here: the factory types as a
+`null` that adopts its context, and a cast was read as a context. javac infers
+`List<Object>` for the bare call — a cast supplies no target for inference —
+and calls the cast inconvertible. The same holds for every expression whose
+type arguments come only from its context: `List.of()`, `Set.of()`,
+`Map.of()`, `Arrays.asList()`, `Optional.empty()`, `Stream.empty()` and an
+argument-free diamond (`new ArrayList<>()`). Cast to a type argument NARROWER
+than `Object` — a concrete type, or `? extends` one — each is now javac's
+`incompatible types: ArrayList<Object> cannot be converted to List<String>`,
+naming the class the expression makes and `Object` for each argument; `Object`,
+`?`, `? super T`, a raw target, a witness and a diamond with an argument still
+cast. Pinned by `empty_factory_adopts_a_cast_as_its_context`,
+`a_diamond_in_a_cast_infers_object` and `casts_an_empty_factory_accepts`.
+
+The same expressions as the ONE argument of `Collections.sort` are refused for
+the same reason: `sort(List<T>)` is invariant in `T`, so the argument fixes `T`
+to `Object`, which is not `Comparable` — javac's `no suitable method found for
+sort(ArrayList<Object>)`. `max`/`min` take `Collection<? extends T>`, which
+leaves `T` free, and accept them; so does `sort(list, comparator)`. Pinned by
+`looser_a_diamond_to_a_bounded_collections_method` (now a wording pin) and
+`sorting_an_empty_factory`.
+
+A method call's RECEIVER is no inference context either, which is the rule
+behind the most-copied line in Java sorting:
+`Map.Entry.comparingByValue().reversed()`. With no witness the factory is
+frozen as `Comparator<Entry<Object,V>>` (`comparingByKey`:
+`Comparator<Entry<K,Object>>`) before `reversed()` hands it on, and that is
+not a comparator of the list's entries. javac refuses it in the three places
+it is written, in three wordings, and so does caturra now: `list.sort(...)`
+and `stream.sorted(...)` say `incompatible types: Comparator<Entry<Object,V>>
+cannot be converted to Comparator<? super Entry<String,Integer>>`, and
+`Collections.sort(list, ...)` says `no suitable method found for
+sort(List<Entry<String,Integer>>,Comparator<Entry<Object,V#1>>)`. A witness
+(`Map.Entry.<String, Integer>comparingByValue().reversed()`),
+`Collections.reverseOrder(...)`, `comparingByValue(Comparator.reverseOrder())`
+and a typed variable all compile. Still looser: the same frozen factory as the
+receiver of `thenComparing`. Pinned by
+`entry_comparator_needs_a_witness_to_reverse`,
+`entry_comparator_reversed_in_a_stream`,
+`entry_comparator_reversed_for_collections_sort` and
+`entry_comparator_reversed_with_a_witness`.
 
 ### Extending a builtin collection (2026-09-27)
 

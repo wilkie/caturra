@@ -43,10 +43,19 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
         if method.is_static || method.is_constructor || method.is_abstract {
             continue;
         }
-        let Some(inherited) =
+        // A bundled FUNCTIONAL interface (`IntBinaryOperator` is the erased
+        // `__IntBinaryOperator { int applyAsInt(Object, Object); }`) is matched
+        // by the JDK's own declaration, which the erased one stands for: its
+        // parameters may be primitives (`applyAsInt(int, int)`) or a narrowed
+        // type argument (`ObjIntConsumer<String>.accept(String, int)`).
+        let functional = inherited_signature(class, &method.name, method.params.len(), classes)
+            .is_none()
+            .then(|| bundled_functional_signature(class, method, classes))
+            .flatten();
+        let Some(inherited) = functional.clone().or_else(|| {
             inherited_signature(class, &method.name, method.params.len(), classes)
                 .or_else(|| library_erased_signature(class, method, classes))
-        else {
+        }) else {
             continue;
         };
         // Same erasure already: the override works without help.
@@ -64,7 +73,7 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
         // The subclass's parameters must each be assignable FROM the
         // inherited ones — otherwise this is an overload, not an override,
         // and bridging it would hijack a legitimately different method.
-        if !is_override_of(&inherited, method) {
+        if functional.is_none() && !is_override_of(&inherited, method) {
             continue;
         }
         // Do not add a bridge whose signature the class already declares.
@@ -127,6 +136,60 @@ fn library_erased_signature(
     erased.return_type = TypeRef::Int;
     erased.body = Vec::new();
     Some(erased)
+}
+
+/// The erased method of a bundled FUNCTIONAL interface that `class` implements
+/// — through its own `implements` or a superclass's (an `enum Op implements
+/// IntBinaryOperator` whose constants each declare `applyAsInt`) — with the
+/// name and arity of `method`. The program wrote the JDK name; the bundled
+/// declaration is `__` plus it.
+fn bundled_functional_signature(
+    class: &ClassDecl,
+    method: &MethodDecl,
+    classes: &HashMap<String, ClassDecl>,
+) -> Option<MethodDecl> {
+    let mut interfaces: Vec<String> = class.interfaces.clone();
+    let mut current = class.superclass.clone();
+    for _ in 0..=classes.len() {
+        let Some(name) = current else {
+            break;
+        };
+        let Some(parent) = classes.get(&name) else {
+            break;
+        };
+        interfaces.extend(parent.interfaces.iter().cloned());
+        current = parent.superclass.clone();
+    }
+    let mut seen: Vec<String> = Vec::new();
+    while let Some(name) = interfaces.pop() {
+        let simple = name.split('<').next().unwrap_or(&name);
+        let simple = simple.rsplit('.').next().unwrap_or(simple).to_owned();
+        if seen.contains(&simple) || seen.len() > classes.len() * 2 + 2 {
+            continue;
+        }
+        seen.push(simple.clone());
+        if let Some(own) = classes.get(&simple) {
+            interfaces.extend(own.interfaces.iter().cloned());
+            continue;
+        }
+        let Some(bundled) = classes.get(&format!("__{simple}")) else {
+            continue;
+        };
+        if !bundled.is_interface {
+            continue;
+        }
+        if let Some(found) = bundled.methods.iter().find(|m| {
+            m.name == method.name
+                && m.params.len() == method.params.len()
+                && m.is_abstract
+                && m.params
+                    .iter()
+                    .any(|p| matches!(&p.ty, TypeRef::Named(n) if n == "Object"))
+        }) {
+            return Some(found.clone());
+        }
+    }
+    None
 }
 
 /// Whether `class` implements a library interface of this name, directly or
