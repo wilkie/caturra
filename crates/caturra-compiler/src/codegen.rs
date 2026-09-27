@@ -328,6 +328,7 @@ fn emit_clinit(
         receiver_location: None,
         void_target: None,
         last_call_inferred: false,
+        lambda_pinned_return: None,
         in_lambda_result: false,
         call_witness: None,
         void_receiver: false,
@@ -12299,6 +12300,7 @@ fn emit_method(
         receiver_location: None,
         void_target: None,
         last_call_inferred: false,
+        lambda_pinned_return: None,
         in_lambda_result: false,
         call_witness: None,
         void_receiver: false,
@@ -27985,6 +27987,10 @@ struct BodyGen<'a> {
     /// is the only place that can then take the type argument from the target
     /// instead of from the arguments (JLS 18.5.2).
     last_call_inferred: bool,
+    /// The last emitted call's name and the type variable of its return, when
+    /// that variable is pinned ONLY by implicitly typed lambdas — which JLS
+    /// §18.5.2 fixes from the call's TARGET first (see `convert_value`).
+    lambda_pinned_return: Option<(String, String)>,
     /// The explicit type WITNESS of the call being emitted
     /// (`Optional.<String>empty()`), for the factories whose result type has
     /// nothing else to read: with no argument and no assignment context, the
@@ -30340,6 +30346,26 @@ impl BodyGen<'_> {
     /// a peek must not move the mark.
     fn emitted_return(&mut self, sig: &MethodSig, arg_types: &[JType]) -> Option<JType> {
         self.last_call_inferred = sig.ret_infer.is_some();
+        // A return that IS a variable only implicitly typed lambdas pin: the
+        // lambdas are not pertinent to applicability (JLS §15.12.2.2), so the
+        // call's target fixes the variable before their results are checked.
+        self.lambda_pinned_return = sig.ret_infer.as_ref().and_then(|plan| {
+            let only_lambdas = !plan.container
+                && !plan.sources.is_empty()
+                && plan.sources.iter().all(|source| {
+                    matches!(source, crate::ast::InferSource::LambdaResult(at)
+                        if matches!(arg_types.get(*at), Some(JType::Object(id))
+                            if crate::ast::is_implicit_lambda(self.table.class_name(*id))))
+                });
+            only_lambdas
+                .then(|| {
+                    sig.var_sources
+                        .iter()
+                        .find(|(_, sources)| *sources == plan.sources)
+                        .map(|(name, _)| (sig.name.clone(), name.clone()))
+                })
+                .flatten()
+        });
         inferred_return(sig, arg_types, self.table)
     }
 
@@ -49586,6 +49612,48 @@ impl BodyGen<'_> {
     /// that type never existed; the diamond's inference failed, and the
     /// message names the variable it could not pin.
     fn convert_value(&mut self, value: &Expr, from: JType, to: JType, constant: Option<i64>) {
+        // `int n = apply("ab", s -> s.charAt(0))`: the target fixes the
+        // variable to `Integer` before the lambda's `Character` is checked
+        // against it — an incompatible bound, not an unbox-and-widen.
+        let pinned = match value {
+            Expr::Call { method, .. } => self
+                .lambda_pinned_return
+                .take()
+                .filter(|(called, _)| called == method),
+            _ => None,
+        };
+        // ...and a lambda that pins NOTHING (`s -> null`) leaves the target's
+        // wrapper as the variable: checked and unboxed as one.
+        if pinned.is_some()
+            && from == JType::Object(self.table.object_id)
+            && let Some(elem) = match to {
+                JType::Boxed(elem) => Some(elem),
+                primitive => boxable_primitive(primitive),
+            }
+        {
+            let class_index = intern_class(self.pool, wrapper_internal(elem));
+            self.code.push_op_u16(op::CHECKCAST, class_index, 0);
+            return self.convert_value(value, JType::Boxed(elem), to, constant);
+        }
+        if let Some((_, variable)) = pinned
+            && let Some(boxed) = match to {
+                JType::Boxed(_) => Some(to),
+                primitive => boxable_primitive(primitive).map(JType::Boxed),
+            }
+            && from != boxed
+            && from != to
+            // Only a result the lambda PINNED: a wrapper, a primitive or a
+            // String. One answering `null` pins nothing, and javac accepts it.
+            && (matches!(from, JType::Boxed(_) | JType::Str) || boxable_primitive(from).is_some())
+        {
+            self.error(
+                value.span(),
+                format!(
+                    "incompatible types: inference variable {variable} has incompatible bounds"
+                ),
+            );
+            return;
+        }
         // `Optional.empty()` is typed like `null` so that it can become any
         // `Optional<T>` its target names — which let it become a `String`, an
         // `Integer`, anything at all. It is an `Optional`, whatever its `T`.

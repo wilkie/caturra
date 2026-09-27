@@ -6523,10 +6523,13 @@ A witness is also a claim about the ARGUMENTS — `W.<String>id(5)` states that
 witness the same call INFERS `T` from the argument and cannot be wrong. The
 check is deliberately narrow: a primitive boxes to exactly one wrapper
 (JLS §5.1.7), so `<Long>id(5)` is provably wrong, and one concrete final
-library type against another likewise — but a witness naming a USER class is
-left alone, because this pass knows each class's members and not its ancestry,
-and a wrong REJECTION would be worse than the missing check. That residue is
-the third bullet in the permissiveness list, pinned rather than left implicit.
+library type against another likewise. A witness naming a USER class was once
+left alone, because this pass was thought to know each class's members and not
+its ancestry — but it holds every class's DIRECT supertypes (`Ctx::supers`),
+and their transitive closure is the ancestry. So (2026-09-27) `<Dog>id(new
+Cat())`, `<Dog>id("s")` and `<Dog>id(3)` are refused as javac refuses them —
+naming the primitive for a literal, not its wrapper — while `<Named>id(new
+Pup())`, a subclass, a variable of the class and `null` pass.
 
 A generic method that answers an `Optional<T>` reads the same way (added
 2026-08-20): `first(list).map(s -> s.length())` had no element, because every
@@ -6538,7 +6541,9 @@ Pinned by `a_type_witness_types_the_call_it_is_written_on`,
 `a_witness_that_contradicts_its_argument`,
 `a_witness_that_names_the_wrong_wrapper`,
 `a_witness_wider_than_the_argument_is_accepted` (eleven shapes the check must
-NOT refuse) and `a_witness_naming_the_wrong_user_class`.
+NOT refuse), `a_witness_naming_the_wrong_user_class`,
+`a_witness_naming_a_user_class_against_a_literal` and
+`a_witness_naming_a_user_supertype_is_accepted`.
 
 ### The Optional a stream answers with (2026-08-19)
 
@@ -9162,23 +9167,13 @@ counting catches: a divergence that stopped being one.
   identity cast, where javac infers `List<Object>` for the bare call and calls
   the cast inconvertible. Assigning the factory to a `List<String>` first is
   legal in both, and is the ordinary spelling. (`empty_factory_adopts_a_cast_as_its_context`)
-- `W.<Dog>id(new Cat())` — a witness naming a USER class is not checked against
-  the argument. The pass that reads witnesses knows each class's members but
-  not its ANCESTRY, so it cannot tell a wrong class from a supertype, and a
-  wrong REJECTION would be worse than the missing check. The provable cases —
-  a primitive against the one wrapper it boxes to, and one concrete final
-  library type against another — ARE refused. (`a_witness_naming_the_wrong_user_class`)
-- `int n = apply("ab", s -> s.charAt(0))` for a `<T, R> R apply(T,
-  Function<T, R>)`. The lambda answers a `char`, which pins `R` to
-  `Character`, and caturra then lets the call's result unbox and widen into an
-  `int` the way an ordinary `Character` value does. javac does not: an
-  inference variable must satisfy every bound at once, and `R = Character`
-  cannot also be `int` — "inference variable R has incompatible bounds". The
-  same lambda answering `s.length()` is fine in both, and the narrower rule is
-  a JLS §18 question this engine does not model. Recorded 2026-09-24 while
-  widening what a call's type variables can be pinned from, though the cell
-  was already loose through the older route.
-  (`an_inferred_variable_unboxes_and_widens`)
+- `Math.max(apply("ab", s -> s.charAt(0)), 1)` for a `<T, R> R apply(T,
+  Function<T, R>)`. A type variable that only an implicitly typed lambda pins
+  is fixed by the call's TARGET first; in an assignment caturra does that
+  (see below), but in an INVOCATION context javac fixes it from each
+  candidate overload's parameter, and caturra resolves the call first and lets
+  its `Character` unbox into whichever overload fits.
+  (`an_inferred_variable_in_an_invocation_context`)
 
 - `Collections.sort(new ArrayList<>())` — javac refuses the DIAMOND here
   ("inferred type does not conform to equality constraint(s)") and compiles the
@@ -17009,12 +17004,23 @@ Pinned as `a_variable_pinned_by_a_lambda` (twenty-six calls), which pins the
 routes that already worked — a variable pinned from a VALUE argument, from a
 list's element, from a `BiFunction` — so they cannot be lost to the new one.
 
-**One permissiveness, recorded rather than left to a sweep.** A lambda that
-answers a `char` pins the variable to `Character`, and caturra lets the call's
-result unbox and widen into an `int`; javac refuses, because an inference
-variable must satisfy every bound at once. It is in the looser-than-javac list
-as `an_inferred_variable_unboxes_and_widens`, and it is not new — the same
-cell was already loose through a variable pinned from a value argument.
+**The target fixes what only a lambda pins (2026-09-27).** An implicitly typed
+lambda is not pertinent to applicability (JLS §15.12.2.2), so a return
+variable that only such lambdas pin is fixed by the call's TARGET before their
+results are checked (JLS §18.5.2): `int n = apply("ab", s -> s.charAt(0))` —
+and `long`/`double`/`Long` targets of an `Integer` answer — are javac's
+"inference variable R has incompatible bounds", not an unbox-and-widen. An
+EXPLICITLY typed lambda, a zero-argument one (explicit by definition), a
+method reference and a VALUE argument pin the variable first and widen as an
+ordinary boxed value does (`long n = id(3)` is fine in both — the earlier note
+here that it was loose too was wrong). A lambda answering `null` pins nothing,
+so the variable is the target's wrapper: checked, then unboxed, which throws.
+The lambda pass records which synthesized classes came from implicitly typed
+lambdas (`ast::is_implicit_lambda`), and `emitted_return` notes a return
+pinned only by them. Still looser: the same variable in an INVOCATION context
+(`an_inferred_variable_in_an_invocation_context`). Pinned by
+`an_inferred_variable_unboxes_and_widens` and
+`an_inferred_variable_fixed_by_its_target`.
 
 ### A library container in a lambda body (2026-09-24)
 

@@ -35,6 +35,7 @@ pub fn desugar_lambdas(
     units: &mut [(String, CompilationUnit)],
 ) -> Vec<crate::diagnostics::Diagnostic> {
     let mut diags = Vec::new();
+    crate::ast::clear_implicit_lambdas();
     let sams = functional_interfaces(units);
     let sam_owners = functional_interface_owners(units);
     // Signatures for single-candidate method-argument target typing.
@@ -5165,6 +5166,54 @@ fn check_witnessed_arguments(
         return;
     };
     for (target, arg) in targets.iter().zip(args) {
+        // A witness naming a PROGRAM class: its ancestry is the supertypes
+        // the program wrote, so a mismatch is provable against another
+        // program class, a final library type, or a primitive.
+        if let Some(TypeRef::Named(wanted)) = target
+            && ctx.declared_classes.contains(wanted)
+            && concrete(&TypeRef::Named(wanted.clone())).is_none()
+        {
+            // A LITERAL is its primitive, which is what javac names (the
+            // general reader answers a literal as its wrapper).
+            let written = match arg {
+                Expr::Literal { value, .. } => match value {
+                    crate::ast::Literal::Int(_) => Some(TypeRef::Int),
+                    crate::ast::Literal::Long(_) => Some(TypeRef::Long),
+                    crate::ast::Literal::Double(_) => Some(TypeRef::Double),
+                    crate::ast::Literal::Float(_) => Some(TypeRef::Float),
+                    crate::ast::Literal::Char(_) => Some(TypeRef::Char),
+                    crate::ast::Literal::Bool(_) => Some(TypeRef::Boolean),
+                    _ => static_type_of(arg, ctx),
+                },
+                _ => static_type_of(arg, ctx),
+            };
+            let described = match written {
+                Some(TypeRef::Named(actual))
+                    if ctx.declared_classes.contains(&actual)
+                        && !is_program_subtype(&actual, wanted, ctx) =>
+                {
+                    Some(actual)
+                }
+                Some(ref other @ TypeRef::Named(_)) => concrete(other).map(str::to_owned),
+                Some(TypeRef::Int) => Some(String::from("int")),
+                Some(TypeRef::Long) => Some(String::from("long")),
+                Some(TypeRef::Double) => Some(String::from("double")),
+                Some(TypeRef::Float) => Some(String::from("float")),
+                Some(TypeRef::Short) => Some(String::from("short")),
+                Some(TypeRef::Byte) => Some(String::from("byte")),
+                Some(TypeRef::Char) => Some(String::from("char")),
+                Some(TypeRef::Boolean) => Some(String::from("boolean")),
+                _ => None,
+            };
+            if let Some(described) = described {
+                ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                    ctx.path,
+                    format!("incompatible types: {described} cannot be converted to {wanted}"),
+                    span,
+                ));
+            }
+            continue;
+        }
         let Some(wanted) = target.as_ref().and_then(concrete) else {
             continue;
         };
@@ -5197,6 +5246,26 @@ fn check_witnessed_arguments(
             span,
         ));
     }
+}
+
+/// Whether program class `sub` is `sup` or reaches it through the supertypes
+/// the program wrote (its superclass and interfaces, transitively).
+fn is_program_subtype(sub: &str, sup: &str, ctx: &Ctx) -> bool {
+    let mut pending = vec![sub.to_owned()];
+    let mut seen: Vec<String> = Vec::new();
+    while let Some(class) = pending.pop() {
+        if class == sup {
+            return true;
+        }
+        if seen.contains(&class) {
+            continue;
+        }
+        if let Some(parents) = ctx.supers.get(&class) {
+            pending.extend(parents.iter().cloned());
+        }
+        seen.push(class);
+    }
+    false
 }
 
 /// A concrete FINAL library type, for which `? super`/`? extends` collapse
@@ -9432,6 +9501,7 @@ fn build_erased_lambda(
         desugar_expr(lambda, None, ctx);
         return lambda.clone();
     };
+    let implicit = !params.is_empty() && params.iter().all(|param| param.ty.is_none());
     // A WILDCARD element reads out as its bound, or as `Object` — which is
     // what a JDK gives the lambda too. Left as the wildcard, the synthesized
     // `(E) __caturraArg0` declared a local of a type nothing resolves, and
@@ -9678,6 +9748,9 @@ fn build_erased_lambda(
         // `invokedynamic` that calls the target directly, so a trace goes
         // straight from the target to whoever ran the functional interface.
         decl.trace_name = Some(String::new());
+    }
+    if implicit {
+        crate::ast::mark_implicit_lambda(&name);
     }
     ctx.new_classes.push(decl);
 

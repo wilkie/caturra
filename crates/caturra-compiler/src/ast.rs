@@ -193,6 +193,34 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+thread_local! {
+    /// The synthesized lambda classes whose lambda was IMPLICITLY typed
+    /// (`s -> s.length()`, as against `(String s) -> …` or `() -> …`). JLS
+    /// §15.12.2.2 leaves such a lambda out of applicability, which is why a
+    /// type variable only it pins is fixed by the call's TARGET first. Filled
+    /// by the lambda pass, read by codegen, for one compilation.
+    static IMPLICIT_LAMBDAS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+/// Forget the previous compilation's implicit lambdas.
+pub fn clear_implicit_lambdas() {
+    IMPLICIT_LAMBDAS.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Record that a synthesized lambda class came from an implicitly typed lambda.
+pub fn mark_implicit_lambda(class: &str) {
+    IMPLICIT_LAMBDAS.with(|cell| {
+        cell.borrow_mut().insert(class.to_owned());
+    });
+}
+
+/// Whether a synthesized lambda class came from an implicitly typed lambda.
+#[must_use]
+pub fn is_implicit_lambda(class: &str) -> bool {
+    IMPLICIT_LAMBDAS.with(|cell| cell.borrow().contains(class))
+}
+
 /// Record the functional interfaces of the file being erased.
 pub fn set_unit_functional_results(results: std::collections::HashMap<String, (usize, usize)>) {
     UNIT_FUNCTIONAL_RESULTS.with(|cell| *cell.borrow_mut() = results);

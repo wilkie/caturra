@@ -33744,13 +33744,11 @@ public class CastAnEmptyList {
 "
 );
 
-// The THIRD permissiveness, and the residue of the type-witness check above: a
-// witness naming a USER class is not checked against the argument, because the
-// pass that reads witnesses knows each class's members but not its ANCESTRY, so
-// it cannot tell a wrong class from a supertype. The provable cases (a
-// primitive against a wrapper, and one concrete final library type against
-// another) are refused; this one compiles and would fail on a real JDK.
-looser_than_javac!(
+// A witness naming a USER class is checked against the argument too: the
+// supertypes the program wrote are that class's ancestry, so another program
+// class that is not below it, a final library type, and a primitive are all
+// provably wrong — in javac's words.
+differential_wording!(
     a_witness_naming_the_wrong_user_class,
     "WrongUserWitness",
     r#"
@@ -33777,6 +33775,62 @@ public class WrongUserWitness {
 
     public static void main(String[] args) {
         System.out.println(WrongUserWitness.<Dog>id(new Cat()).name());
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_witness_naming_a_user_class_against_a_literal,
+    "LiteralUserWitness",
+    r#"
+public class LiteralUserWitness {
+    static class Dog {}
+
+    static <T> T id(T value) {
+        return value;
+    }
+
+    public static void main(String[] args) {
+        System.out.println(LiteralUserWitness.<Dog>id(3));
+    }
+}
+"#
+);
+
+// ...and the shapes it must NOT refuse: an interface or superclass witness
+// over a class below it, a subclass, a variable of the witnessed class, null.
+differential_test!(
+    a_witness_naming_a_user_supertype_is_accepted,
+    "UserSupertypeWitness",
+    r#"
+public class UserSupertypeWitness {
+    interface Named {
+        String name();
+    }
+
+    static class Dog implements Named {
+        public String name() {
+            return "dog";
+        }
+    }
+
+    static class Pup extends Dog {
+        public String name() {
+            return "pup";
+        }
+    }
+
+    static <T> T id(T value) {
+        return value;
+    }
+
+    public static void main(String[] args) {
+        Dog d = new Dog();
+        System.out.println(UserSupertypeWitness.<Named>id(new Pup()).name()
+            + " " + UserSupertypeWitness.<Dog>id(new Pup()).name()
+            + " " + UserSupertypeWitness.<Dog>id(d).name()
+            + " " + UserSupertypeWitness.<Dog>id(null));
     }
 }
 "#
@@ -60762,19 +60816,11 @@ public class CL {
 "#
 );
 
-// A FOURTH permissiveness, found while widening what a call's type variables
-// can be pinned from. A lambda that answers a `char` pins the variable to
-// `Character`, and caturra then lets the call's result unbox and widen into an
-// `int` the way an ordinary `Character` value does. javac does not: an
-// inference variable must satisfy every bound at once, and `R = Character`
-// cannot also be `int`, so it reports "inference variable R has incompatible
-// bounds" — while the same lambda answering `s.length()` is fine in both.
-//
-// Pinning the variable at all is what the program asked for, and the narrower
-// rule (a boxed inference result may not widen) is a JLS §18 question caturra
-// does not model. It is also not new: the same cell was already loose through
-// a variable pinned from a VALUE argument, which is the older route.
-looser_than_javac!(
+// A type variable that ONLY implicitly typed lambdas pin is fixed by the
+// call's TARGET first (JLS §18.5.2 — such a lambda is not pertinent to
+// applicability), so a lambda answering `char` into an `int` is javac's
+// "inference variable R has incompatible bounds", not an unbox-and-widen.
+differential_wording!(
     an_inferred_variable_unboxes_and_widens,
     "InferWidenChar",
     r#"
@@ -60788,6 +60834,75 @@ public class InferWidenChar {
     public static void main(String[] args) {
         int n = apply("ab", s -> s.charAt(0));
         System.out.println(n);
+    }
+}
+"#
+);
+
+// ...and what the rule leaves alone: a lambda answering the target's own
+// wrapper, an EXPLICITLY typed lambda, a method reference, a zero-argument
+// lambda (explicitly typed by definition) and a VALUE argument all widen as
+// an ordinary boxed value does; an operand is not a target; a lambda
+// answering `null` takes the target's wrapper, and unboxing it throws.
+differential_test!(
+    an_inferred_variable_fixed_by_its_target,
+    "InferFixedByTarget",
+    r#"
+import java.util.function.Function;
+import java.util.function.Supplier;
+
+public class InferFixedByTarget {
+    static <T, R> R apply(T value, Function<T, R> f) {
+        return f.apply(value);
+    }
+
+    static <T> T id(T value) {
+        return value;
+    }
+
+    static <R> R get(Supplier<R> s) {
+        return s.get();
+    }
+
+    public static void main(String[] args) {
+        int a = apply("abc", s -> s.length());
+        char b = apply("abc", s -> s.charAt(1));
+        long c = apply("abc", (String s) -> s.length());
+        long d = apply("abc", String::length);
+        long e = get(() -> 3);
+        long f = id(4);
+        int g = apply("abc", s -> s.charAt(0)) + 1;
+        Object h = apply("abc", s -> s.length());
+        Integer i = apply("abc", s -> null);
+        System.out.println(a + " " + b + " " + c + " " + d + " " + e + " " + f + " " + g + " " + h + " " + i);
+        try {
+            int j = apply("abc", s -> null);
+            System.out.println(j);
+        } catch (NullPointerException npe) {
+            System.out.println("npe");
+        }
+    }
+}
+"#
+);
+
+// What is still looser: the same variable in an INVOCATION context. javac
+// fixes it from each candidate overload's parameter (`Math.max(int, int)` makes
+// `R = Integer`, which a `char` answer then contradicts); caturra resolves the
+// call first and lets its `Character` unbox into whichever overload fits.
+looser_than_javac!(
+    an_inferred_variable_in_an_invocation_context,
+    "InferInvocation",
+    r#"
+import java.util.function.Function;
+
+public class InferInvocation {
+    static <T, R> R apply(T value, Function<T, R> f) {
+        return f.apply(value);
+    }
+
+    public static void main(String[] args) {
+        System.out.println(Math.max(apply("ab", s -> s.charAt(0)), 1));
     }
 }
 "#
