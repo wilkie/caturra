@@ -9122,17 +9122,6 @@ counting catches: a divergence that stopped being one.
   but the refusal has to say so: written in full it gave the honest reason,
   written simply it read as a typo — "unknown type 'Math'", about a class
   every program has used. (`stricter_namespace_class_as_a_variable_type`)
-- A factory that ADOPTS its context (`Collections.emptyList()`,
-  `Optional.empty()`, `List.of()`) used as an argument where the OVERLOADS
-  disagree about it: `two(Collections.emptyList())`, against
-  `two(List<String>)` and `two(String)`, is "reference to two is ambiguous".
-  These factories are typed like the null literal, which is what lets one be
-  assigned to a `List<String>` with no element to check; in an overload set
-  that leniency matches both candidates, where javac infers `List<String>` and
-  matches one. Giving them their context-free type instead (`List<Object>`, the
-  one `var` gets) was tried and is worse — the element is then CHECKED, and
-  `list.addAll(Collections.emptyList())` becomes a type error. The lenient
-  typing stays. (`stricter_a_context_free_factory_in_an_overload_set`)
 - A method whose bytecode outgrows a 16-bit branch offset — `code too large`,
   javac's own wording, at about half the size javac allows. A class file's
   branches are signed 16-bit, and caturra reaches that before the 64K limit on
@@ -9162,13 +9151,6 @@ counting catches: a divergence that stopped being one.
   refusal says exactly that rather than pretending the name is unknown. Every
   other way of holding one (a field, a wrapper, composition) works.
   (`stricter_extending_a_builtin_collection`)
-- A factory INSIDE a factory: `List<List<Number>> rows = List.of(List.of(1));`
-  and `Map<String, List<Number>> named = Map.of("k", List.of(1));`. A poly
-  expression takes its type argument from the target, and the rule does not
-  recurse — reaching a level down needs to know the inner call is poly as
-  well, and refusing is the safe answer. Assigning the inner list to a
-  `List<Number>` variable first compiles in both.
-  (`stricter_a_factory_inside_a_factory`)
 - `Map.Entry.comparingByValue().reversed()` with no type witness. javac
   infers `Comparator<Entry<Object, V>>` for the bare factory call, and
   `.reversed()` freezes that before the target type can correct it, so javac
@@ -15845,6 +15827,38 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `a_class_that_extends_number`, `string_value_of_a_type_variable`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
+
+### A factory inside a factory, and an empty factory in an overload set (2026-09-26)
+
+Two more `stricter_` pins closed, both about a collection FACTORY taking its
+type from where it is used — what javac's inference does and caturra's
+bottom-up typing could not:
+
+- **A factory inside a factory.** `List<List<Number>> rows = List.of(List.of(1))`
+  is legal: javac infers the inner call against the outer target's element,
+  so it is a `List<Number>`. Typed on its own it was a `List<Integer>`, and a
+  list of those is no list of `List<Number>`. A factory's arguments are now
+  checked against the target's element types, recursively
+  (`factory_args_fit`) — for `List`/`Set`/`Stream.of`, `Arrays.asList`,
+  `Collections.singleton*`, `Optional.of` and `Map.of`'s keys and values —
+  and when one cannot fit, the failure names the factory's own variable, the
+  innermost failing one as javac does ("inference variable E has
+  incompatible bounds"; `K`/`V` for a map).
+- **An empty factory in an overload set.** `Collections.emptyList()` (and
+  `emptySet`, `emptyMap`, `List.of()`, `Optional.empty()`) is typed like the
+  null literal, so that it can become the `List<T>` its target names. In an
+  overload set that fit every reference parameter, and
+  `two(Collections.emptyList())` against `two(List<String>)` and
+  `two(String)` was ambiguous. An ambiguity is now asked again with each such
+  argument as the RAW type of its family (`context_free_retry`), which only
+  its own family's overload takes. (Typing them that way everywhere was tried
+  before, and made `list.addAll(Collections.emptyList())` a type error — so
+  only an ambiguity asks.)
+
+A 1,070-program fuzz run over four fresh seeds, just before, found nothing.
+
+Pinned as `a_factory_inside_a_factory`, `an_inner_factory_that_cannot_fit`
+and `a_map_factory_with_the_wrong_key`.
 
 ### `java.io.Serializable` (2026-09-26)
 

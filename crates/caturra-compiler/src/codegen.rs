@@ -6378,6 +6378,32 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
 ///
 /// `elem` is the wrapper's element; `None` means "a wrapper, unknown which"
 /// (a `String`, say), which reaches only the `Object`/`Comparable` faces.
+/// The family of a context-free empty factory — `Collections.emptyList()`,
+/// `List.of()`, `Optional.empty()` — by the interface it answers.
+fn context_free_family(expr: &Expr) -> Option<&'static str> {
+    let Expr::Call {
+        receiver: Some(receiver),
+        method,
+        args,
+        ..
+    } = expr
+    else {
+        return None;
+    };
+    let Expr::Name { path, .. } = receiver.as_ref() else {
+        return None;
+    };
+    Some(
+        match (path.last()?.as_str(), method.as_str(), args.is_empty()) {
+            ("Collections", "emptyList", true) | ("List", "of", true) => "List",
+            ("Collections", "emptySet", true) | ("Set", "of", true) => "Set",
+            ("Collections", "emptyMap", true) | ("Map", "of", true) => "Map",
+            ("Optional", "empty", true) => "Optional",
+            _ => return None,
+        },
+    )
+}
+
 /// `Optional.empty()` written with no witness (`java.util.Optional.empty()`
 /// too).
 fn is_empty_optional_call(expr: &Expr) -> bool {
@@ -30068,7 +30094,120 @@ impl BodyGen<'_> {
         // ARGUMENTS against it, which is what the element test does here.
         let poly = mints_a_collection(init)
             || (self.last_call_inferred && matches!(init, Expr::Call { .. }));
-        poly && self.elements_widen(init_ty, target)
+        poly && (self.elements_widen(init_ty, target) || self.factory_args_fit(init, target))
+    }
+
+    /// Whether a collection FACTORY's arguments fit the target's element types
+    /// — each one converting as it is, or being itself a factory that fits.
+    /// javac infers a factory INSIDE a factory from the outer target:
+    /// `List<List<Number>> rows = List.of(List.of(1))` makes the inner call a
+    /// `List<Number>`, where reading it on its own said `List<Integer>`, and a
+    /// list of those is not a list of `List<Number>`.
+    fn factory_args_fit(&mut self, init: &Expr, target: JType) -> bool {
+        let Expr::Call {
+            receiver: Some(receiver),
+            method,
+            args,
+            ..
+        } = init
+        else {
+            return false;
+        };
+        let Expr::Name { path, .. } = receiver.as_ref() else {
+            return false;
+        };
+        let class = path.last().map_or("", String::as_str);
+        let slots = TypeArgs::of(target);
+        let value_of = |elem: Option<ElemType>, table: &MethodTable| {
+            elem.map(|elem| elem_value_type(elem, table))
+        };
+        let (Some(first), second) = (
+            value_of(slots.first, self.table),
+            value_of(slots.second, self.table),
+        ) else {
+            return false;
+        };
+        match (class, method.as_str()) {
+            ("List" | "Set" | "Stream", "of")
+            | ("Arrays", "asList")
+            | ("Collections", "singletonList" | "singleton")
+            | ("Optional", "of") => args.iter().all(|arg| self.value_fits(arg, first)),
+            ("Map", "of") | ("Collections", "singletonMap") => {
+                let Some(second) = second else {
+                    return false;
+                };
+                args.iter().enumerate().all(|(index, arg)| {
+                    self.value_fits(arg, if index % 2 == 0 { first } else { second })
+                })
+            }
+            _ => false,
+        }
+    }
+
+    /// The type variable of a collection factory whose arguments cannot take
+    /// the target's element types — `E` for `List.of`/`Set.of`, `T` for
+    /// `Arrays.asList`/`Stream.of`, `K` or `V` for `Map.of`, whichever position
+    /// fails first — when the target is of the factory's own family.
+    fn factory_variable_that_failed(&mut self, value: &Expr, to: JType) -> Option<&'static str> {
+        let Expr::Call {
+            receiver: Some(receiver),
+            method,
+            args,
+            ..
+        } = value
+        else {
+            return None;
+        };
+        let Expr::Name { path, .. } = receiver.as_ref() else {
+            return None;
+        };
+        let slots = TypeArgs::of(to);
+        let first = slots.first.map(|elem| elem_value_type(elem, self.table))?;
+        let second = slots.second.map(|elem| elem_value_type(elem, self.table));
+        let own = match (path.last()?.as_str(), method.as_str()) {
+            ("List" | "Set", "of") => "E",
+            ("Arrays", "asList") | ("Stream", "of") => "T",
+            ("Map", "of") => {
+                let keys_fit = args
+                    .iter()
+                    .step_by(2)
+                    .all(|key| self.value_fits(key, first));
+                if keys_fit { "V" } else { "K" }
+            }
+            _ => return None,
+        };
+        // The argument that does not fit, when it is itself a factory, is the
+        // one javac blames: `Map.of("k", List.of("s"))` for a
+        // `Map<String, List<Number>>` is the inner `E`, not the map's `V`.
+        let is_map = own == "K" || own == "V";
+        for (index, arg) in args.iter().enumerate() {
+            let want = if is_map && index % 2 == 1 {
+                match second {
+                    Some(second) => second,
+                    None => continue,
+                }
+            } else {
+                first
+            };
+            if !self.value_fits(arg, want)
+                && mints_a_collection(arg)
+                && let Some(inner) = self.factory_variable_that_failed(arg, want)
+            {
+                return Some(inner);
+            }
+        }
+        Some(own)
+    }
+
+    /// Whether one argument converts to `want`: as it is (a primitive boxing
+    /// first), or as a factory whose own arguments fit.
+    fn value_fits(&mut self, expr: &Expr, want: JType) -> bool {
+        let ty = self.type_of(expr);
+        let boxed = boxable_primitive(ty).map_or(ty, JType::Boxed);
+        widens(ty, want, self.table)
+            || widens(boxed, want, self.table)
+            || (mints_a_collection(expr)
+                && (self.elements_widen(ty, want) || self.factory_args_fit(expr, want)))
     }
 
     /// Whether a CONDITIONAL takes its type from the target instead of from
@@ -38089,8 +38228,12 @@ impl BodyGen<'_> {
                 }
             }
             Resolution::Ambiguous(candidates) => {
-                self.error(span, ambiguous_message(method, &candidates));
-                return None;
+                if let Some(sig) = self.context_free_retry(&class_name, method, args, &arg_types) {
+                    sig
+                } else {
+                    self.error(span, ambiguous_message(method, &candidates));
+                    return None;
+                }
             }
         };
         let sig = match self.conditional_resolution(&class_name, method, args, &arg_types, &sig) {
@@ -40008,8 +40151,12 @@ impl BodyGen<'_> {
                 }
             }
             Resolution::Ambiguous(candidates) => {
-                self.error(span, ambiguous_message(method, &candidates));
-                return None;
+                if let Some(sig) = self.context_free_retry(class, method, args, &arg_types) {
+                    sig
+                } else {
+                    self.error(span, ambiguous_message(method, &candidates));
+                    return None;
+                }
             }
         };
         let sig = match self.conditional_resolution(class, method, args, &arg_types, &sig) {
@@ -42340,6 +42487,59 @@ impl BodyGen<'_> {
                     .map(|m| m.describe_in(table))
                     .collect::<Vec<_>>(),
             )),
+        }
+    }
+
+    /// An ambiguity that a CONTEXT-FREE factory made: `Collections.emptyList()`
+    /// is typed like the null literal, so that it can become the `List<T>` its
+    /// target names — which fits every reference parameter, and made
+    /// `two(Collections.emptyList())` against `two(List<String>)` and
+    /// `two(String)` ambiguous. javac reads it as a `List` of what the call
+    /// needs, which only the `List` overload takes. Asked again with each such
+    /// argument as the RAW type of its family.
+    fn context_free_retry(
+        &mut self,
+        class: &str,
+        method: &str,
+        args: &[Expr],
+        arg_types: &[JType],
+    ) -> Option<MethodSig> {
+        let raw = ElemType::Wildcard {
+            read: self.table.object_id,
+            bound: WildcardBound::Raw,
+        };
+        let mut changed = false;
+        let retyped: Vec<JType> = args
+            .iter()
+            .zip(arg_types)
+            .map(|(arg, &ty)| {
+                if ty != JType::Null {
+                    return ty;
+                }
+                let family = match context_free_family(arg) {
+                    Some("List") => JType::library_list(raw),
+                    Some("Set") => JType::Set {
+                        elem: raw,
+                        face: CollFace::Iface,
+                    },
+                    Some("Map") => JType::Map {
+                        key: raw,
+                        value: raw,
+                        face: CollFace::Iface,
+                    },
+                    Some("Optional") => JType::Optional(raw),
+                    _ => return ty,
+                };
+                changed = true;
+                family
+            })
+            .collect();
+        if !changed {
+            return None;
+        }
+        match self.table.resolve(class, method, &retyped) {
+            Resolution::Found(sig) => Some(sig.clone()),
+            _ => None,
         }
     }
 
@@ -48909,6 +49109,15 @@ impl BodyGen<'_> {
             && let Some(message) = self.diamond_inference_failure(value, from, to)
         {
             self.diagnostics[before].message = message;
+        }
+        // A collection FACTORY that cannot become its target is an inference
+        // failure too, and javac names the factory's own variable.
+        if self.diagnostics.len() > before
+            && let Some(variable) = self.factory_variable_that_failed(value, to)
+        {
+            self.diagnostics[before].message = format!(
+                "incompatible types: inference variable {variable} has incompatible bounds"
+            );
         }
         if self.diagnostics.len() > before {
             self.blame_conditional_branches(value, to, before);

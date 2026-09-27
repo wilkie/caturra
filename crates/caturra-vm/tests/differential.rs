@@ -36390,27 +36390,6 @@ public class InitBlockLambda {
 // tried and is worse: it makes `list.addAll(Collections.emptyList())` a
 // type error, because then the element IS checked and `Object` is not `String`.
 // The lenient typing stays; the strictness is enumerated instead of hidden.
-stricter_than_javac!(
-    stricter_a_context_free_factory_in_an_overload_set,
-    "EmptyOverload",
-    r#"
-import java.util.*;
-
-public class EmptyOverload {
-    static void two(List<String> l) {
-        System.out.println("list");
-    }
-
-    static void two(String s) {
-        System.out.println("str");
-    }
-
-    public static void main(String[] args) {
-        two(Collections.emptyList());
-    }
-}
-"#
-);
 
 // A local class declared in a switch ARM. Unlike a local variable, its scope
 // is the rest of its switch block statement GROUP (JLS 6.3): a later arm may
@@ -49510,18 +49489,6 @@ differential_wording!(
     reject_pinned_poly_container,
     "RejPin",
     "import java.util.*;\npublic class RejPin {\n  interface Shape { double area(); }\n  static class Circle implements Shape { public double area() { return 3.0; } }\n  static class Square implements Shape { public double area() { return 4.0; } }\n  static class Bag<T> { List<T> items = new ArrayList<>(); void add(T v) { items.add(v); } }\n  static <T> void give(Bag<T> b, T v) { b.add(v); }\n  static <T> void giveAll(List<T> into, T v) { into.add(v); }\n  static <T> void pairUp(Bag<T> b, List<T> more) { }\n  public static void main(String[] args) { Bag<String> b = new Bag<>(); pairUp(b, List.of(1)); System.out.println(\"no\"); }\n}"
-);
-
-stricter_than_javac!(
-    stricter_a_factory_inside_a_factory,
-    "StrictNested",
-    "import java.util.*;\n\
-public class StrictNested {\n\
-  public static void main(String[] args) {\n\
-    List<List<Number>> rows = List.of(List.of(1));\n\
-    Map<String, List<Number>> named = Map.of(\"k\", List.of(1));\n\
-    System.out.println(rows + \" \" + named);\n\
-  }\n}"
 );
 
 // A generic method's variable pinned by a MAP parameter: `put(Map<K, V>, K, V)`
@@ -64591,6 +64558,72 @@ import java.util.*;
 public class EmptyOptionalString {
     public static void main(String[] args) {
         String s = Optional.empty();
+    }
+}
+"#
+);
+
+// A factory INSIDE a factory takes its type from the outer target, as javac
+// infers it: `List<List<Number>> rows = List.of(List.of(1))` makes the inner
+// call a `List<Number>` (it read as `List<Integer>`, and a list of those is not
+// a list of `List<Number>`). And a context-free empty factory
+// (`Collections.emptyList()`, `List.of()`, `Optional.empty()`) passed to an
+// overload set chooses the overload of its own family, where typing it like
+// null made every reference overload fit and the call ambiguous.
+differential_test!(
+    a_factory_inside_a_factory,
+    "FactoryInFactory",
+    r#"
+import java.util.*;
+
+public class FactoryInFactory {
+    static String two(List<String> l) { return "list " + l.size(); }
+    static String two(String s) { return "str"; }
+    static String opt(Optional<Integer> o) { return "optional " + o.isPresent(); }
+    static String opt(Integer i) { return "integer"; }
+    static String sets(Set<String> s) { return "set"; }
+    static String sets(List<String> l) { return "list"; }
+
+    public static void main(String[] args) {
+        List<List<Number>> rows = List.of(List.of(1), List.of(2.5, 3L));
+        Map<String, List<Number>> named = Map.of("k", List.of(1));
+        List<Set<Object>> sets = Arrays.asList(Set.of("a"), Set.of(1));
+        List<Optional<Number>> opts = List.of(Optional.of(1));
+        Map<String, Map<String, List<Number>>> deep = Map.of("a", Map.of("b", List.of(1, 2.0)));
+        Set<List<CharSequence>> seqs = Set.of(List.of("x", new StringBuilder("y")));
+        System.out.println(rows + " " + named + " " + sets.size() + " " + opts + " " + deep + " " + seqs.size());
+        System.out.println(two(Collections.emptyList()) + " " + two(List.of()) + " " + opt(Optional.empty())
+            + " " + sets(Collections.emptySet()) + " " + sets(Collections.emptyList()));
+    }
+}
+"#
+);
+
+// ...and when an inner factory cannot become what the outer target needs, the
+// failure is ITS variable's, in javac's words.
+differential_wording!(
+    an_inner_factory_that_cannot_fit,
+    "InnerFactoryFails",
+    r#"
+import java.util.*;
+
+public class InnerFactoryFails {
+    public static void main(String[] args) {
+        Map<String, List<Number>> m = Map.of("k", List.of("s"));
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_map_factory_with_the_wrong_key,
+    "MapFactoryKey",
+    r#"
+import java.util.*;
+
+public class MapFactoryKey {
+    public static void main(String[] args) {
+        Map<String, List<Number>> m = Map.of(1, List.of(1));
     }
 }
 "#
