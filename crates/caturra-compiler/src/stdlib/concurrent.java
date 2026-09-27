@@ -910,7 +910,7 @@ interface Condition {
   void signalAll();
 }
 
-class ReentrantLock implements Lock {
+class ReentrantLock implements Lock, Serializable {
   private final boolean __fair;
   Thread __owner;
   int __holds;
@@ -1144,7 +1144,7 @@ class __ConditionObject implements Condition {
 
 // ---------------------------------------------------------------- atomics
 
-class AtomicInteger extends Number {
+class AtomicInteger extends Number implements Serializable {
   private int __value;
 
   public AtomicInteger() {}
@@ -1262,7 +1262,7 @@ class AtomicInteger extends Number {
   public double doubleValue() { return (double) get(); }
 }
 
-class AtomicLong extends Number {
+class AtomicLong extends Number implements Serializable {
   private long __value;
 
   public AtomicLong() {}
@@ -1380,7 +1380,7 @@ class AtomicLong extends Number {
   public double doubleValue() { return (double) get(); }
 }
 
-class AtomicBoolean {
+class AtomicBoolean implements Serializable {
   private boolean __value;
 
   public AtomicBoolean() {}
@@ -1454,7 +1454,7 @@ class AtomicBoolean {
   public String toString() { return Boolean.toString(get()); }
 }
 
-class AtomicReference<V> {
+class AtomicReference<V> implements Serializable {
   private V __value;
 
   public AtomicReference() {}

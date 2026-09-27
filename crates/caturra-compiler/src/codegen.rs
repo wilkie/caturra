@@ -1280,9 +1280,18 @@ impl MethodTable {
         // `RandomAccess` is the other marker: a list that indexes in constant
         // time wears it, and an algorithm asks `list instanceof RandomAccess`
         // before it decides how to walk one.
-        for (offset, name) in ["AutoCloseable", "Closeable", "Cloneable", "RandomAccess"]
-            .into_iter()
-            .enumerate()
+        // `Serializable` is the third marker: it says an object may be written
+        // out, and `String`, the wrappers, the concrete collections, arrays,
+        // enums and every throwable wear it (`statically_serializable`).
+        for (offset, name) in [
+            "AutoCloseable",
+            "Closeable",
+            "Cloneable",
+            "RandomAccess",
+            "Serializable",
+        ]
+        .into_iter()
+        .enumerate()
         {
             let id = ClassId(2 + u16::try_from(offset).unwrap_or(0));
             table.class_names.push(String::from(name));
@@ -1312,7 +1321,7 @@ impl MethodTable {
                     type_param_names: Vec::new(),
                     is_bundled: true,
                     supertype_args: Vec::new(),
-                    methods: if matches!(name, "Cloneable" | "RandomAccess") {
+                    methods: if matches!(name, "Cloneable" | "RandomAccess" | "Serializable") {
                         Vec::new()
                     } else {
                         vec![MethodSig {
@@ -6369,8 +6378,84 @@ fn raw_generic_arity(simple: &str) -> Option<usize> {
 ///
 /// `elem` is the wrapper's element; `None` means "a wrapper, unknown which"
 /// (a `String`, say), which reaches only the `Object`/`Comparable` faces.
+/// `Optional.empty()` written with no witness (`java.util.Optional.empty()`
+/// too).
+fn is_empty_optional_call(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call { receiver: Some(receiver), method, args, type_args, .. }
+        if method == "empty"
+            && args.is_empty()
+            && type_args.is_empty()
+            && matches!(receiver.as_ref(), Expr::Name { path, .. }
+                if path.join(".") == "Optional" || path.join(".") == "java.util.Optional"))
+}
+
+/// Whether a value of static type `ty` is a `java.io.Serializable` as javac
+/// sees it: a `String`, a wrapper, a builder, an array, a throwable, the
+/// number and date values, an enum, and a CONCRETE collection — but not a
+/// collection held as its interface (`List` does not extend `Serializable`,
+/// so a `List<String>` variable does not convert, while an `ArrayList<String>`
+/// does), nor a view or a cursor.
+fn statically_serializable(ty: JType, table: &MethodTable) -> bool {
+    let marker = table.class_id("Serializable");
+    let class_is = |id: ClassId| {
+        Some(id) == marker
+            || marker.is_some_and(|marker| table.is_subtype(id, marker))
+            || table.info_by_id(id).is_some_and(|info| info.is_enum)
+            || table.library_throwable_ancestor(id).is_some()
+    };
+    match ty {
+        JType::Str
+        | JType::Boxed(_)
+        | JType::StringBuilder(_)
+        | JType::Array { .. }
+        | JType::Exception(_)
+        | JType::Class
+        | JType::BigInteger
+        | JType::BigDecimal
+        | JType::RoundingMode
+        | JType::MathContext
+        | JType::File
+        | JType::Uuid
+        | JType::Pattern
+        | JType::BitSet
+        | JType::DecimalFormat
+        | JType::NumberFormat
+        | JType::LocalDate
+        | JType::LocalTime
+        | JType::LocalDateTime
+        | JType::Duration
+        | JType::Period
+        | JType::Year
+        | JType::YearMonth
+        | JType::MonthDay
+        | JType::DayOfWeek
+        | JType::Month
+        | JType::ChronoUnit
+        | JType::ChronoField
+        | JType::IsoEra
+        | JType::TextStyle
+        | JType::FormatStyle
+        | JType::ValueRange
+        | JType::Vector(_)
+        | JType::Stack(_)
+        | JType::Hashtable { .. } => true,
+        JType::List { face, .. } | JType::Set { face, .. } | JType::Map { face, .. } => {
+            !matches!(face, CollFace::Iface | CollFace::ConcurrentMap)
+        }
+        JType::LinkedList { role, .. } => matches!(role, SeqRole::Full | SeqRole::ArrayDeque),
+        JType::TreeSet(_, face) | JType::TreeMap { role: face, .. } => {
+            matches!(face, TableFace::Concrete)
+        }
+        JType::Object(id) | JType::Generic { class: id, .. } => class_is(id),
+        _ => false,
+    }
+}
+
 fn wrapper_face(elem: Option<ElemType>, class: ClassId, table: &MethodTable) -> bool {
-    if class == table.object_id || table.class_id("Comparable") == Some(class) {
+    if class == table.object_id
+        || table.class_id("Comparable") == Some(class)
+        || table.class_id("Serializable") == Some(class)
+    {
         return true;
     }
     table.class_id("Number") == Some(class)
@@ -8799,6 +8884,8 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
             (from, to),
             (JType::Array { .. }, JType::Object(id)) if table.class_id("Cloneable") == Some(id)
         )
+        || matches!(to, JType::Object(id) if table.class_id("Serializable") == Some(id))
+            && statically_serializable(from, table)
         // ...and an indexed list to `RandomAccess`, which an algorithm asks
         // about before it decides how to walk one.
         || matches!(
@@ -47074,6 +47161,25 @@ impl BodyGen<'_> {
                 read: self.table.object_id,
             });
         }
+        // A CLASS on one side that the other side's value already is — a
+        // `Serializable` beside a `3.5`, a `Comparable` beside an `"a"` — is
+        // the join: javac's `Arrays.asList(aSerializable, 3.5, 'x')` is a
+        // `List<Serializable>`, and meeting at `Object` made it unassignable
+        // to the list the program declared.
+        let value_of = |elem: ElemType| {
+            let ty = elem_value_type(elem, self.table);
+            boxable_primitive(ty).map_or(ty, JType::Boxed)
+        };
+        match (left, right) {
+            (ElemType::Object(class), other) | (other, ElemType::Object(class))
+                if class != self.table.object_id
+                    && !matches!(other, ElemType::Object(_))
+                    && widens(value_of(other), JType::Object(class), self.table) =>
+            {
+                return Some(ElemType::Object(class));
+            }
+            _ => {}
+        }
         let (ElemType::Object(left), ElemType::Object(right)) = (left, right) else {
             return None;
         };
@@ -48778,6 +48884,25 @@ impl BodyGen<'_> {
     /// that type never existed; the diamond's inference failed, and the
     /// message names the variable it could not pin.
     fn convert_value(&mut self, value: &Expr, from: JType, to: JType, constant: Option<i64>) {
+        // `Optional.empty()` is typed like `null` so that it can become any
+        // `Optional<T>` its target names — which let it become a `String`, an
+        // `Integer`, anything at all. It is an `Optional`, whatever its `T`.
+        if from == JType::Null
+            && is_empty_optional_call(value)
+            && !matches!(to, JType::Optional(_))
+            && to != JType::Object(self.table.object_id)
+        {
+            self.error(
+                value.span(),
+                format!(
+                    "incompatible types: no instance(s) of type variable(s) T exist so that \
+                     Optional<T> conforms to {}\n  where T is a type-variable:\n    T extends \
+                     Object declared in method <T>empty()",
+                    to.describe(self.table)
+                ),
+            );
+            return;
+        }
         let before = self.diagnostics.len();
         self.convert_for_assignment_const(from, to, value.span(), constant);
         if self.diagnostics.len() > before
@@ -49144,6 +49269,11 @@ impl BodyGen<'_> {
             // ...and an ARRAY to `Cloneable`, which every one of them is.
             (JType::Array { .. }, JType::Object(id))
                 if self.table.class_id("Cloneable") == Some(id) => {}
+            // ...and a `Serializable` value to that marker.
+            (from, JType::Object(id))
+                if self.table.class_id("Serializable") == Some(id)
+                    && from.is_reference()
+                    && statically_serializable(from, self.table) => {}
             // An indexed list held as the `RandomAccess` it is.
             (JType::List { .. } | JType::Stack(_), JType::Object(id))
                 if self.table.class_id("RandomAccess") == Some(id) => {}

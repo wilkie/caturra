@@ -125,6 +125,8 @@ const JAVA_IO: &[&str] = &[
     // narrower `throws`), so a resource class may implement the one every
     // I/O tutorial names.
     "Closeable",
+    // The marker a class implements to say it may be written out.
+    "Serializable",
     // Modelled, and absent from this list — so each worked written under a
     // wildcard import and was "cannot find symbol ... in package java.io"
     // under its own. `Reader` is the face the three readers share, and
@@ -545,7 +547,7 @@ const KNOWN_UNSUPPORTED: &[(&str, &[&str])] = &[
         // listed in both tables resolves fine written under a wildcard import
         // and is refused by its own single import, which is the same fact
         // answered two ways.
-        &["Serializable", "InputStream"],
+        &["InputStream"],
     ),
     // The rest of `java.lang`: the JVM's own errors (a program can CATCH one,
     // and naming it should say what it is), the class-loading and module

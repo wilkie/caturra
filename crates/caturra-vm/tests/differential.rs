@@ -64451,3 +64451,147 @@ public class MakeVoid {
 }
 "#
 );
+
+// `java.io.Serializable`, the marker interface — refused by name before. A
+// class implements it (with its `serialVersionUID`); `String`, the wrappers,
+// arrays, enums, a concrete collection and a lambda of an interface that
+// extends it are one; `getInterfaces()` names it.
+differential_test!(
+    serializable_as_a_marker,
+    "SerializableMarker",
+    r#"
+import java.io.Serializable;
+import java.util.*;
+
+public class SerializableMarker {
+    static class Pet implements Serializable {
+        private static final long serialVersionUID = 1L;
+        String name;
+        Pet(String name) { this.name = name; }
+        public String toString() { return name; }
+    }
+    static class Plain {}
+    interface Named extends Serializable { String name(); }
+    enum Color { RED }
+    static String kind(Serializable s) { return s.getClass().getSimpleName(); }
+
+    public static void main(String[] args) {
+        Serializable a = "text";
+        Serializable b = 42;
+        Serializable c = new Pet("Rex");
+        Serializable d = new ArrayList<String>();
+        Serializable e = Color.RED;
+        Serializable f = new int[] {1};
+        List<Serializable> all = new ArrayList<>(Arrays.asList(a, b, c, d, e, 3.5, 'x', true, 7L));
+        System.out.println(all.size() + " " + kind("s") + " " + kind(1) + " " + kind(new Pet("Tom")));
+        Object[] things = {"s", 1, new Pet("p"), new Plain(), new ArrayList<>(), new HashMap<>(), new int[0],
+            Color.RED, new StringBuilder(), Optional.empty(), new Object(), 'c', new TreeSet<>(), List.of(1),
+            new LinkedList<>(), new ArrayDeque<>()};
+        StringBuilder out = new StringBuilder();
+        for (Object o : things) out.append(o instanceof Serializable ? "S" : "-");
+        System.out.println(out);
+        Named n = () -> "lambda";
+        System.out.println(n.name() + " " + (n instanceof Serializable));
+        System.out.println(Serializable.class.getName() + " " + Serializable.class.isInterface()
+            + " " + Arrays.toString(Pet.class.getInterfaces()));
+        Serializable cast = (Serializable) (Object) "x";
+        System.out.println(cast + " " + Pet.serialVersionUID);
+    }
+}
+"#
+);
+
+// ...and which LIBRARY values are one, measured on a JDK class by class: a map
+// is and its key view is not, `SimpleEntry` is and `Map.entry` is not, an
+// `ArrayList` is and its `subList` is not.
+differential_test!(
+    which_library_values_are_serializable,
+    "SerializableValues",
+    r#"
+import java.io.*;
+import java.math.*;
+import java.nio.file.*;
+import java.text.*;
+import java.time.*;
+import java.time.temporal.*;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
+import java.util.regex.*;
+import java.util.stream.*;
+
+public class SerializableValues {
+    public static void main(String[] args) throws Exception {
+        List<Integer> base = new ArrayList<>(List.of(3, 1, 2));
+        TreeSet<Integer> ts = new TreeSet<>(base);
+        TreeMap<String, Integer> tm = new TreeMap<>(Map.of("a", 1, "b", 2));
+        HashMap<String, Integer> hm = new HashMap<>(tm);
+        Object[] bank = {
+            "s", 1, 2L, 3.0, 4f, (short) 5, (byte) 6, 'c', true, new StringBuilder(), new StringBuffer(),
+            new int[0], new String[0], new Object(), new ArrayList<>(), new LinkedList<>(), new Vector<>(),
+            new Stack<>(), new ArrayDeque<>(), new PriorityQueue<>(), new HashSet<>(), new LinkedHashSet<>(),
+            ts, hm, new LinkedHashMap<>(), tm, new Hashtable<>(), new EnumMap<>(DayOfWeek.class),
+            EnumSet.noneOf(DayOfWeek.class), Arrays.asList(1), base.subList(0, 1), hm.keySet(), hm.values(),
+            hm.entrySet(), tm.keySet(), ts.headSet(2), tm.headMap("b"), Collections.unmodifiableList(base),
+            Collections.unmodifiableSet(ts), Collections.unmodifiableMap(hm), Collections.synchronizedList(base),
+            Collections.emptyList(), Collections.singletonList(1), Collections.singleton(1), Collections.emptyMap(),
+            List.of(1), List.of(), Set.of(1), Map.of("a", 1), Map.entry("a", 1),
+            new AbstractMap.SimpleEntry<>("a", 1), hm.entrySet().iterator().next(), base.iterator(),
+            Optional.of(1), OptionalInt.of(1), new Random(1), UUID.randomUUID(), new BigInteger("1"),
+            BigDecimal.ONE, RoundingMode.UP, MathContext.DECIMAL32, new File("f"), Paths.get("p"),
+            Pattern.compile("x"), Pattern.compile("x").matcher("x"), LocalDate.of(2020, 1, 1), LocalTime.NOON,
+            LocalDateTime.of(2020, 1, 1, 0, 0), Duration.ofSeconds(1), Period.ofDays(1), Year.of(2020),
+            YearMonth.of(2020, 1), MonthDay.of(1, 1), DayOfWeek.MONDAY, Month.MAY, ChronoUnit.DAYS,
+            ChronoField.YEAR, new IllegalStateException(), new IOException(), new Error(),
+            new AtomicInteger(), new AtomicLong(), new AtomicBoolean(), new AtomicReference<>(),
+            new ConcurrentHashMap<>(), new CountDownLatch(1), new ReentrantLockHolder().lock, new DecimalFormat("0"),
+            NumberFormat.getInstance(), new StringTokenizer("a"), new BitSet(), String.class,
+            new Scanner("x"), new StringWriter(), new StringReader("x"), Comparator.naturalOrder(),
+            Comparator.reverseOrder(), Collections.reverseOrder(), String.CASE_INSENSITIVE_ORDER,
+            Stream.of(1), new IntSummaryStatistics(), Thread.currentThread(),
+            Executors.newSingleThreadExecutor(), TimeUnit.SECONDS, new Object[0][0],
+        };
+        for (Object o : bank) {
+            System.out.println(o.getClass().getName() + " " + (o instanceof Serializable));
+            if (o instanceof ExecutorService) ((ExecutorService) o).shutdown();
+        }
+    }
+    static class ReentrantLockHolder { java.util.concurrent.locks.ReentrantLock lock = new java.util.concurrent.locks.ReentrantLock(); }
+}
+"#
+);
+
+// A collection held as its INTERFACE is not one statically — `List` does not
+// extend `Serializable` — though the `ArrayList` behind it is.
+differential_wording!(
+    a_list_variable_is_not_serializable,
+    "ListNotSerializable",
+    r#"
+import java.io.Serializable;
+import java.util.*;
+
+public class ListNotSerializable {
+    public static void main(String[] args) {
+        List<String> names = new ArrayList<>();
+        Serializable s = names;
+    }
+}
+"#
+);
+
+// `Optional.empty()` adopts its target's `T` — but it is an `Optional`
+// whatever `T` is. Typed like `null` so it could adopt one, it converted to a
+// `String` as readily as to an `Optional<String>`.
+differential_wording!(
+    an_empty_optional_is_an_optional,
+    "EmptyOptionalString",
+    r#"
+import java.util.*;
+
+public class EmptyOptionalString {
+    public static void main(String[] args) {
+        String s = Optional.empty();
+    }
+}
+"#
+);

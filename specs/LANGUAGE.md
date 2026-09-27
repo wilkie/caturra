@@ -15846,6 +15846,39 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### `java.io.Serializable` (2026-09-26)
+
+`implements Serializable` was "java.io.Serializable is not supported by
+caturra". It is a marker interface now, synthesized beside `Cloneable` and
+`RandomAccess`, and both halves of what it means agree with a JDK:
+
+- **Statically** (`statically_serializable`): a `String`, a wrapper (a
+  primitive boxes into it), a builder, an array, a throwable, the number and
+  date values, an enum, a class that implements it, and a CONCRETE collection
+  convert to it — but a collection held as its interface does not (`List`
+  does not extend `Serializable`, so `Serializable s = aListVariable;` is
+  javac's "incompatible types"). A literal list of serializable values joins
+  AT it: `Arrays.asList(aSerializable, 3.5, 'x')` is a `List<Serializable>`,
+  where it met at `Object` (a class on one side of a join that the other
+  side's value already is, is the join).
+- **At run time** (`value_is_serializable`): a string, a wrapper, an array, a
+  throwable, an enum constant, a class that implements it, or a library object
+  a JDK says is one — measured class by class (`SERIALIZABLE_LIBRARY`): a map
+  is and its key view is not, `AbstractMap.SimpleEntry` is and `Map.entry` is
+  not, an `ArrayList` is and its `subList` is not. The bundled atomics,
+  `ReentrantLock` and `Random` implement it, as a JDK's do.
+
+On the way: `String.CASE_INSENSITIVE_ORDER.getClass()` named itself
+`java.lang.Object` (it is `String$CaseInsensitiveComparator`), and
+`Optional.empty()` — typed like `null` so that it can adopt any
+`Optional<T>` — converted to a `String` or an `Integer` as readily; it is an
+`Optional` whatever its `T`, and says so in javac's words. Still open: an
+`IntStream` names itself `ReferencePipeline$Head` (the stream does not record
+its element family).
+
+Pinned as `serializable_as_a_marker`, `which_library_values_are_serializable`,
+`a_list_variable_is_not_serializable` and `an_empty_optional_is_an_optional`.
+
 ### Two accepts-invalid pins closed, and a `List<Number>` that crashed (2026-09-26)
 
 Both remaining `loose_` generics pins — programs caturra accepted and javac

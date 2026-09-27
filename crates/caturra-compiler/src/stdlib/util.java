@@ -6,7 +6,7 @@
 // -1170105035 here as it is there. An unseeded Random draws its seed from
 // Math.random(), which the VM seeds deterministically for tests and from host
 // entropy in the browser.
-class Random {
+class Random implements Serializable {
   private long __seed;
   private double __nextGaussian = 0.0;
   private boolean __haveNextGaussian = false;

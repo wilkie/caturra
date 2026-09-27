@@ -2345,7 +2345,11 @@ impl<'run> Interpreter<'run> {
                             // implements either already matched, by name.)
                             let matches_type = matches_type
                                 || reference
-                                    .is_some_and(|r| self.builtin_iteration_face(r, &target));
+                                    .is_some_and(|r| self.builtin_iteration_face(r, &target))
+                                // `java.io.Serializable` cuts across every kind
+                                // above, as the iteration faces do.
+                                || (qualified_face(&target) == "java/io/Serializable"
+                                    && reference.is_some_and(|r| self.value_is_serializable(r)));
                             if opcode == op::INSTANCEOF {
                                 frame.stack.push(JValue::Int(i32::from(matches_type)));
                             } else {
@@ -23797,6 +23801,7 @@ fn qualified_face(target: &str) -> &str {
     match target {
         "Comparable" => "java/lang/Comparable",
         "Cloneable" => "java/lang/Cloneable",
+        "Serializable" => "java/io/Serializable",
         "AutoCloseable" => "java/lang/AutoCloseable",
         "Closeable" => "java/io/Closeable",
         "Iterable" => "java/lang/Iterable",
@@ -24332,6 +24337,122 @@ fn class_is_assignable(actual: &str, wanted: &str) -> bool {
     library_faces(actual).contains(&qualified_face(wanted))
 }
 
+/// The library classes a JDK 11 says are `java.io.Serializable` — measured on
+/// one, class by class (a map's key view is not, the map is; `Map.entry` is
+/// not, a `SimpleEntry` is). The kinds that are one wholesale — a string, a
+/// wrapper, an array, a throwable, an enum — are answered before this.
+const SERIALIZABLE_LIBRARY: &[&str] = &[
+    "java/lang/String$CaseInsensitiveComparator",
+    "java/lang/StringBuffer",
+    "java/lang/StringBuilder",
+    "java/lang/Class",
+    "java/io/File",
+    "java/math/BigDecimal",
+    "java/math/BigInteger",
+    "java/math/MathContext",
+    // The library ENUMS: every enum is one.
+    "java/math/RoundingMode",
+    "java/time/DayOfWeek",
+    "java/time/Month",
+    "java/time/chrono/IsoEra",
+    "java/time/format/FormatStyle",
+    "java/time/format/TextStyle",
+    "java/time/temporal/ChronoField",
+    "java/time/temporal/ChronoUnit",
+    "java/text/DecimalFormat",
+    "java/time/Duration",
+    "java/time/LocalDate",
+    "java/time/LocalDateTime",
+    "java/time/LocalTime",
+    "java/time/MonthDay",
+    "java/time/Period",
+    "java/time/Year",
+    "java/time/YearMonth",
+    "java/util/AbstractMap$SimpleEntry",
+    "java/util/AbstractMap$SimpleImmutableEntry",
+    "java/util/ArrayDeque",
+    "java/util/ArrayList",
+    "java/util/Arrays$ArrayList",
+    "java/util/BitSet",
+    "java/util/Collections$EmptyList",
+    "java/util/Collections$EmptyMap",
+    "java/util/Collections$EmptySet",
+    "java/util/Collections$ReverseComparator",
+    "java/util/Collections$ReverseComparator2",
+    "java/util/Collections$SingletonList",
+    "java/util/Collections$SingletonMap",
+    "java/util/Collections$SingletonSet",
+    "java/util/Collections$SynchronizedCollection",
+    "java/util/Collections$SynchronizedList",
+    "java/util/Collections$SynchronizedMap",
+    "java/util/Collections$SynchronizedRandomAccessList",
+    "java/util/Collections$SynchronizedSet",
+    "java/util/Collections$UnmodifiableCollection",
+    "java/util/Collections$UnmodifiableList",
+    "java/util/Collections$UnmodifiableMap",
+    "java/util/Collections$UnmodifiableRandomAccessList",
+    "java/util/Collections$UnmodifiableSet",
+    "java/util/Collections$UnmodifiableSortedMap",
+    "java/util/Collections$UnmodifiableSortedSet",
+    "java/util/Collections$UnmodifiableNavigableMap",
+    "java/util/Collections$UnmodifiableNavigableSet",
+    "java/util/Comparators$NaturalOrderComparator",
+    "java/util/EnumMap",
+    "java/util/HashMap",
+    "java/util/HashSet",
+    "java/util/Hashtable",
+    "java/util/ImmutableCollections$List12",
+    "java/util/ImmutableCollections$ListN",
+    "java/util/ImmutableCollections$Map1",
+    "java/util/ImmutableCollections$MapN",
+    "java/util/ImmutableCollections$Set12",
+    "java/util/ImmutableCollections$SetN",
+    "java/util/JumboEnumSet",
+    "java/util/LinkedHashMap",
+    "java/util/LinkedHashSet",
+    "java/util/LinkedList",
+    "java/util/Locale",
+    "java/util/PriorityQueue",
+    "java/util/Random",
+    "java/util/RegularEnumSet",
+    "java/util/Stack",
+    "java/util/TreeMap",
+    "java/util/TreeMap$AscendingSubMap",
+    "java/util/TreeMap$DescendingSubMap",
+    "java/util/TreeSet",
+    "java/util/UUID",
+    "java/util/Vector",
+    "java/util/concurrent/ConcurrentHashMap",
+    "java/util/regex/Pattern",
+];
+
+impl Interpreter<'_> {
+    /// Whether a value is a `java.io.Serializable`: a string, a wrapper, an
+    /// array, a throwable, an enum constant, a class that implements the
+    /// marker (bundled ones included), or a library object a JDK says is one.
+    fn value_is_serializable(&self, reference: HeapRef) -> bool {
+        match self.heap.get(reference) {
+            Some(
+                crate::value::HeapObject::JavaString(_)
+                | crate::value::HeapObject::Boxed { .. }
+                | crate::value::HeapObject::Exception { .. },
+            ) => true,
+            Some(crate::value::HeapObject::Instance { class_name, .. }) => [
+                "Serializable",
+                "java/io/Serializable",
+                "java/lang/Enum",
+                "java/lang/Throwable",
+            ]
+            .iter()
+            .any(|face| self.is_runtime_subtype(class_name, face)),
+            _ => {
+                intrinsics::array_class_name(&self.heap, reference).is_some()
+                    || SERIALIZABLE_LIBRARY.contains(&self.object_class_name(reference).as_str())
+            }
+        }
+    }
+}
+
 fn wrapper_is(wrapper: &str, target: &str) -> bool {
     // `Comparable` is the BUNDLED interface, so it reaches the VM under its
     // flattened name — every wrapper implements it, and answering `false`
@@ -24340,7 +24461,7 @@ fn wrapper_is(wrapper: &str, target: &str) -> bool {
         return true;
     }
     match target {
-        "java/lang/Object" => true,
+        "java/lang/Object" | "java/io/Serializable" | "Serializable" => true,
         "java/lang/Number" | "Number" => {
             wrapper != "java/lang/Boolean" && wrapper != "java/lang/Character"
         }
@@ -24582,6 +24703,9 @@ pub(crate) fn object_class_name_of(heap: &Heap, receiver: HeapRef) -> String {
         Some(HeapObject::Comparator(spec)) => String::from(match spec {
             crate::value::ComparatorSpec::Natural => "java/util/Comparators$NaturalOrderComparator",
             crate::value::ComparatorSpec::Reversed(_) => "java/util/Collections$ReverseComparator",
+            crate::value::ComparatorSpec::CaseInsensitive => {
+                "java/lang/String$CaseInsensitiveComparator"
+            }
             // Everything else is built from a lambda, and a JDK names a
             // lambda's class after its address — unstable between runs.
             _ => "java/lang/Object",
