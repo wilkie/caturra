@@ -53093,13 +53093,12 @@ stricter_than_javac!(
     "import java.util.*;\npublic class StrictSpliterator { static void r() { new ArrayList<String>().spliterator(); } }"
 );
 
-// System properties (and the three wrapper readers that look like parsers:
-// `Integer.getInteger`, `Long.getLong`, `Boolean.getBoolean`) are the host's,
-// and caturra has no process around it.
+// The properties as one `java.util.Properties` table are not modelled — single
+// keys are (`system_properties_one_key_at_a_time`).
 stricter_than_javac!(
     strict_no_system_properties,
     "StrictProperties",
-    "public class StrictProperties { static void r() { System.getProperty(\"user.dir\"); } }"
+    "public class StrictProperties { static void r() { System.getProperties(); } }"
 );
 
 // Annotations are parsed and discarded, so none survives to be read back off a
@@ -64624,6 +64623,57 @@ import java.util.*;
 public class MapFactoryKey {
     public static void main(String[] args) {
         Map<String, List<Number>> m = Map.of(1, List.of(1));
+    }
+}
+"#
+);
+
+// System PROPERTIES are the program's own table, seeded with the separators and
+// what is running: set, read, cleared, and decoded by the three wrapper readers
+// (a value that does not decode is the default, never an exception). Only the
+// lines that do not depend on the machine are compared.
+differential_test!(
+    system_properties_one_key_at_a_time,
+    "SystemProps",
+    r#"
+import java.util.*;
+
+public class SystemProps {
+    static void t(String label, Runnable r) {
+        try { r.run(); } catch (RuntimeException e) { System.out.println(label + " ! " + e.getClass().getName() + ": " + e.getMessage()); }
+    }
+    public static void main(String[] args) {
+        System.out.println(System.getProperty("line.separator").equals("\n") + " " + System.getProperty("file.separator")
+            + " " + System.getProperty("path.separator") + " " + System.getProperty("java.specification.version")
+            + " " + (System.getProperty("java.version") != null) + " " + (System.getProperty("user.dir") != null)
+            + " " + (System.getProperty("os.name") != null) + " " + (System.getProperty("user.home") != null));
+        System.out.println(System.getProperty("no.such") + " " + System.getProperty("no.such", "fallback"));
+        System.out.println(System.setProperty("app.mode", "test") + " " + System.getProperty("app.mode")
+            + " " + System.setProperty("app.mode", "live") + " " + System.getProperty("app.mode", "x"));
+        System.out.println(System.clearProperty("app.mode") + " " + System.getProperty("app.mode") + " " + System.clearProperty("app.mode"));
+        System.setProperty("app.count", "42");
+        System.setProperty("app.big", "9000000000");
+        System.setProperty("app.bad", "4x");
+        System.setProperty("app.hex", "0x1F");
+        System.setProperty("app.flag", "TRUE");
+        System.setProperty("app.no", "yes");
+        Integer none = null;
+        Long noLong = null;
+        System.out.println(Integer.getInteger("app.count") + " " + Integer.getInteger("app.bad") + " " + Integer.getInteger("app.none")
+            + " " + Integer.getInteger("app.none", 7) + " " + Integer.getInteger("app.count", 7) + " " + Integer.getInteger("app.hex")
+            + " " + Integer.getInteger("app.big") + " " + Integer.getInteger("app.none", Integer.valueOf(9)));
+        System.out.println(Long.getLong("app.big") + " " + Long.getLong("app.none", 5L) + " " + Long.getLong("app.bad")
+            + " " + Integer.getInteger("app.none", none) + " " + Long.getLong("app.none", noLong) + " " + Long.getLong("app.count", noLong));
+        System.out.println(Boolean.getBoolean("app.flag") + " " + Boolean.getBoolean("app.no") + " " + Boolean.getBoolean("app.none")
+            + " " + Integer.getInteger(null) + " " + Boolean.getBoolean(null) + " " + Integer.getInteger(""));
+        t("getProperty null", () -> System.getProperty(null));
+        t("getProperty empty", () -> System.getProperty(""));
+        t("setProperty null key", () -> System.setProperty(null, "v"));
+        t("setProperty null value", () -> System.setProperty("k", null));
+        t("clearProperty empty", () -> System.clearProperty(""));
+        t("getProperty null default", () -> System.out.println(System.getProperty("x", null)));
+        System.out.println(System.getenv("CATURRA_SURELY_UNSET_VARIABLE") + " " + System.lineSeparator().equals(System.getProperty("line.separator")));
+        t("getenv null", () -> System.getenv(null));
     }
 }
 "#

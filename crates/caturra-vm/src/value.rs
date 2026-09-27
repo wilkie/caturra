@@ -1701,7 +1701,31 @@ pub struct Heap {
     chm_cursors: std::collections::HashMap<u64, ChmCursor>,
     /// The next for-each token handed out.
     next_chm_token: i32,
+    /// The program's SYSTEM PROPERTIES (`System.getProperty` and friends),
+    /// made on first use from `DEFAULT_PROPERTIES`.
+    properties: Option<std::collections::HashMap<String, String>>,
 }
+
+/// The properties a program starts with. The separators are what a program
+/// actually reads, and are the platform's that caturra behaves as (it ends a
+/// line with `\n` everywhere); the rest say what is running and where.
+const DEFAULT_PROPERTIES: &[(&str, &str)] = &[
+    ("line.separator", "\n"),
+    ("file.separator", "/"),
+    ("path.separator", ":"),
+    ("file.encoding", "UTF-8"),
+    ("java.specification.version", "11"),
+    ("java.version", "11"),
+    ("java.vendor", "caturra"),
+    ("java.vm.name", "caturra"),
+    ("java.class.path", "."),
+    ("java.io.tmpdir", "/tmp"),
+    ("os.name", "caturra"),
+    ("os.arch", "wasm32"),
+    ("user.dir", "/"),
+    ("user.home", "/"),
+    ("user.name", "student"),
+];
 
 /// A `ConcurrentHashMap` cursor. It never throws
 /// `ConcurrentModificationException`: it holds the node it will return NEXT —
@@ -1778,6 +1802,7 @@ impl Default for Heap {
             next_chm_token: FIRST_CHM_TOKEN,
             format_text: std::collections::HashMap::new(),
             builder_capacity: std::collections::HashMap::new(),
+            properties: None,
         }
     }
 }
@@ -1786,6 +1811,30 @@ impl Heap {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    fn properties(&mut self) -> &mut std::collections::HashMap<String, String> {
+        self.properties.get_or_insert_with(|| {
+            DEFAULT_PROPERTIES
+                .iter()
+                .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+                .collect()
+        })
+    }
+
+    /// A system property's value, if it is set.
+    pub fn property(&mut self, key: &str) -> Option<String> {
+        self.properties().get(key).cloned()
+    }
+
+    /// Set a system property, answering what it replaced.
+    pub fn set_property(&mut self, key: &str, value: &str) -> Option<String> {
+        self.properties().insert(key.to_owned(), value.to_owned())
+    }
+
+    /// Remove a system property, answering what it was.
+    pub fn clear_property(&mut self, key: &str) -> Option<String> {
+        self.properties().remove(key)
     }
 
     /// Allocate an object, returning its reference.

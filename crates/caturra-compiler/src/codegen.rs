@@ -12703,6 +12703,8 @@ fn is_true_literal(expr: &Expr) -> bool {
 /// A parameter of an intrinsic method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BParam {
+    /// A WRAPPER class (`Integer`): a boxed value, or null.
+    Boxed(ElemType),
     /// A `java.io.OutputStream` — what `writeTo` pours into. The only one
     /// caturra models is a `ByteArrayOutputStream`, which is why the abstract
     /// name is a face of it.
@@ -13864,11 +13866,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
         "getPackage",
         "caturra does not model java.lang.Package",
     ),
-    (
-        "Integer",
-        "getInteger",
-        "system properties are not supported by caturra",
-    ),
     // The three SPACE queries. caturra's filesystem lives in memory and has no
     // device under it, so every number it could answer would be fiction about
     // a disk the program cannot fill — and a made-up "total" is worse than a
@@ -13998,11 +13995,10 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     ),
     // ---- java.lang.System: the facilities that are the HOST's, not the
     // program's. caturra runs in a browser tab with no process around it.
-    ("System", "getProperty", SYSTEM_PROPERTIES),
+    // The properties are modelled one KEY at a time; the whole table as a
+    // `java.util.Properties` object is not.
     ("System", "getProperties", SYSTEM_PROPERTIES),
-    ("System", "setProperty", SYSTEM_PROPERTIES),
     ("System", "setProperties", SYSTEM_PROPERTIES),
-    ("System", "clearProperty", SYSTEM_PROPERTIES),
     (
         "System",
         "getenv",
@@ -14041,8 +14037,6 @@ const UNSUPPORTED_MEMBERS: &[(&str, &str, &str)] = &[
     // ---- The three system-property readers that live on a wrapper. Their
     // names read like parsers and are not: `Integer.getInteger("x")` reads the
     // PROPERTY "x". (`Integer.getInteger` has its own row above.)
-    ("Boolean", "getBoolean", SYSTEM_PROPERTIES),
-    ("Long", "getLong", SYSTEM_PROPERTIES),
     // ---- java.lang.Character: the three questions that need the whole
     // Unicode character database, not the classification tables caturra
     // carries.
@@ -14482,7 +14476,7 @@ const FILE_WALK: &str = "caturra answers a directory with Files.list and a tree 
 
 /// The reasons shared by several rows above. Written once so that two members
 /// refused for the SAME reason cannot end up explaining it differently.
-const SYSTEM_PROPERTIES: &str = "system properties are not supported by caturra";
+const SYSTEM_PROPERTIES: &str = "caturra does not model java.util.Properties - read and write one key at a time with System.getProperty/setProperty";
 const NO_SECURITY_MANAGER: &str =
     "caturra does not model java.lang.SecurityManager (removed from Java itself in 17)";
 const NATIVE_CODE: &str = "caturra cannot load native code";
@@ -22247,6 +22241,27 @@ const INTEGER_METHODS: &[BuiltinMethod] = &[
         BRet::Wrapper(ElemType::Int),
         "(Ljava/lang/String;)Ljava/lang/Integer;",
     ),
+    // A system property, decoded (`Integer.decode`): null, or the default,
+    // when it is unset or does not parse.
+    bm(
+        "getInteger",
+        &[S],
+        BRet::Wrapper(ElemType::Int),
+        "(Ljava/lang/String;)Ljava/lang/Integer;",
+    ),
+    bm(
+        "getInteger",
+        &[S, I],
+        BRet::Wrapper(ElemType::Int),
+        "(Ljava/lang/String;I)Ljava/lang/Integer;",
+    ),
+    // The default as a WRAPPER — which may be null, and is then the answer.
+    bm(
+        "getInteger",
+        &[S, BParam::Boxed(ElemType::Int)],
+        BRet::Wrapper(ElemType::Int),
+        "(Ljava/lang/String;Ljava/lang/Integer;)Ljava/lang/Integer;",
+    ),
     bm("toUnsignedString", &[I], BRet::Str, "(I)Ljava/lang/String;"),
     bm("toUnsignedLong", &[I], BRet::Long, "(I)J"),
     bm(
@@ -22648,6 +22663,25 @@ const FLOAT_METHODS: &[BuiltinMethod] = &[
 ];
 
 const LONG_METHODS: &[BuiltinMethod] = &[
+    // A system property, decoded (`Long.decode`).
+    bm(
+        "getLong",
+        &[S],
+        BRet::Wrapper(ElemType::Long),
+        "(Ljava/lang/String;)Ljava/lang/Long;",
+    ),
+    bm(
+        "getLong",
+        &[S, L],
+        BRet::Wrapper(ElemType::Long),
+        "(Ljava/lang/String;J)Ljava/lang/Long;",
+    ),
+    bm(
+        "getLong",
+        &[S, BParam::Boxed(ElemType::Long)],
+        BRet::Wrapper(ElemType::Long),
+        "(Ljava/lang/String;Ljava/lang/Long;)Ljava/lang/Long;",
+    ),
     bm("parseLong", &[S], BRet::Long, "(Ljava/lang/String;)J"),
     bm("parseLong", &[S, I], BRet::Long, "(Ljava/lang/String;I)J"),
     bm(
@@ -22823,6 +22857,38 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
         "(Ljava/lang/Object;ILjava/lang/Object;II)V",
     ),
     bm("lineSeparator", &[], BRet::Str, "()Ljava/lang/String;"),
+    // The system PROPERTIES — the program's own table, seeded with the
+    // separators and what is running — and an environment that is empty.
+    bm(
+        "getProperty",
+        &[S],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm(
+        "getProperty",
+        &[S, S],
+        BRet::Str,
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm(
+        "setProperty",
+        &[S, S],
+        BRet::Str,
+        "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm(
+        "clearProperty",
+        &[S],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
+    bm(
+        "getenv",
+        &[S],
+        BRet::Str,
+        "(Ljava/lang/String;)Ljava/lang/String;",
+    ),
     // `System.setOut(stream)` / `setErr`: what a JUnit test does to capture
     // printing. The singleton BEHIND `System.out` is replaced, so every
     // `System.out.println` after it goes wherever the new stream points.
@@ -22926,6 +22992,8 @@ const SYSTEM_METHODS: &[BuiltinMethod] = &[
 ];
 
 const BOOLEAN_METHODS: &[BuiltinMethod] = &[
+    // Whether a system property is the text "true", ignoring case.
+    bm("getBoolean", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
     bm("parseBoolean", &[S], BRet::Boolean, "(Ljava/lang/String;)Z"),
     bm("toString", &[Z], BRet::Str, "(Z)Ljava/lang/String;"),
     bm(
@@ -26440,6 +26508,7 @@ fn bparam_type(param: BParam, args: TypeArgs, table: &MethodTable) -> JType {
         BParam::BigInteger => JType::BigInteger,
         BParam::BigDecimal => JType::BigDecimal,
         BParam::Uuid => JType::Uuid,
+        BParam::Boxed(elem) => JType::Boxed(elem),
         BParam::BitSet => JType::BitSet,
         BParam::Year => JType::Year,
         BParam::YearMonth => JType::YearMonth,
@@ -38050,7 +38119,13 @@ impl BodyGen<'_> {
         for (arg, param) in args.iter().zip(chosen.params) {
             let param_ty = bparam_type(*param, TypeArgs::default(), self.table);
             let actual = self.expr(arg);
-            self.numeric_conversion(actual, param_ty);
+            // A WRAPPER parameter takes the wrapper, null and all — the
+            // numeric path would unbox it first.
+            if let BParam::Boxed(_) = param {
+                self.convert_value(arg, actual, param_ty, None);
+            } else {
+                self.numeric_conversion(actual, param_ty);
+            }
             args_width += param_ty.width();
         }
         let method_ref = intern_method_ref(self.pool, jvm_class, chosen.name, chosen.descriptor);

@@ -13937,6 +13937,9 @@ pub fn invoke_static(
             // The JVM's is system-dependent; caturra always runs where a line
             // ends with a newline.
             "lineSeparator" => Ok(Some(JValue::Ref(Some(heap.alloc_string("\n"))))),
+            "getProperty" | "setProperty" | "clearProperty" | "getenv" => {
+                system_property(heap, method, args)
+            }
             "currentTimeMillis" => Ok(Some(JValue::Long(console.now_millis()))),
             "nanoTime" => Ok(Some(JValue::Long(
                 console.now_millis().wrapping_mul(1_000_000),
@@ -15844,6 +15847,70 @@ fn parse_ranged(heap: &Heap, args: &[JValue], long: bool, unsigned: bool) -> Res
 
 /// `Integer.decode`/`Long.decode`: an optional sign, then `0x`/`0X`/`#` (hex),
 /// a leading `0` (octal), or decimal. Returned as i64 for the caller to range.
+/// `System.getProperty`/`setProperty`/`clearProperty` against the program's
+/// own property table, and `getenv` against an environment that is empty
+/// (caturra runs with no process around it).
+fn system_property(
+    heap: &mut Heap,
+    method: &str,
+    args: &[JValue],
+) -> Result<Option<JValue>, VmError> {
+    let answer = |heap: &mut Heap, text: Option<String>| {
+        Ok(Some(JValue::Ref(text.map(|text| heap.alloc_string(&text)))))
+    };
+    if method == "getenv" {
+        arg_string(heap, &args[0])?;
+        return Ok(Some(JValue::Ref(None)));
+    }
+    // A JDK checks the KEY first, in its own words, before anything else.
+    let key = match &args[0] {
+        JValue::Ref(None) => {
+            return Err(throw("java.lang.NullPointerException: key can't be null"));
+        }
+        key => arg_string(heap, key)?,
+    };
+    if key.is_empty() {
+        return Err(throw(
+            "java.lang.IllegalArgumentException: key can't be empty",
+        ));
+    }
+    match (method, args) {
+        ("getProperty", [_]) => {
+            let value = heap.property(&key);
+            answer(heap, value)
+        }
+        // The default may itself be null, and is handed back as-is.
+        ("getProperty", [_, default]) => match heap.property(&key) {
+            Some(value) => answer(heap, Some(value)),
+            None => Ok(Some(*default)),
+        },
+        ("setProperty", [_, value]) => {
+            let value = arg_string(heap, value)?;
+            let old = heap.set_property(&key, &value);
+            answer(heap, old)
+        }
+        ("clearProperty", [_]) => {
+            let old = heap.clear_property(&key);
+            answer(heap, old)
+        }
+        _ => Err(VmError::UnknownIntrinsic(format!("System.{method}"))),
+    }
+}
+
+/// The text of the system property a wrapper's `getInteger`/`getLong`/
+/// `getBoolean` names — `None` for a null or empty key as much as for an
+/// unset one: those methods answer their default rather than complain.
+fn named_property(heap: &mut Heap, key: &JValue) -> Option<String> {
+    let JValue::Ref(Some(reference)) = key else {
+        return None;
+    };
+    let key = heap.string_text(*reference)?;
+    if key.is_empty() {
+        return None;
+    }
+    heap.property(&key)
+}
+
 fn decode_integer(text: &str) -> Result<i64, VmError> {
     // The JDK checks the length FIRST and says so in its own words, rather
     // than falling through to the "For input string" wording.
@@ -16004,6 +16071,21 @@ fn integer_static(
         Ok(Some(JValue::Ref(Some(reference))))
     };
     match (method, args) {
+        // A system property, decoded; a value that does not decode, or does
+        // not fit, is the default — never an exception.
+        ("getInteger", [key, rest @ ..]) => {
+            let decoded = named_property(heap, key)
+                .and_then(|text| decode_integer(&text).ok())
+                .and_then(|value| i32::try_from(value).ok());
+            match (decoded, rest) {
+                (Some(value), _) | (None, &[JValue::Int(value)]) => {
+                    let reference = heap.box_wrapper("java/lang/Integer", JValue::Int(value));
+                    Ok(Some(JValue::Ref(Some(reference))))
+                }
+                (None, [default @ JValue::Ref(_)]) => Ok(Some(*default)),
+                _ => Ok(Some(JValue::Ref(None))),
+            }
+        }
         ("parseInt" | "valueOf", [text @ JValue::Ref(_)]) => {
             // `valueOf` answers the WRAPPER OBJECT; only `parseX` answers the
             // primitive. Returning the primitive for both made two `valueOf`
@@ -16983,6 +17065,9 @@ fn boolean_static(
 ) -> Result<Option<JValue>, VmError> {
     let z = |v: bool| Ok(Some(JValue::Int(i32::from(v))));
     match (method, args) {
+        ("getBoolean", [key]) => {
+            z(named_property(heap, key).is_some_and(|text| text.eq_ignore_ascii_case("true")))
+        }
         // `valueOf(String)` is `parseBoolean`'s answer (boxed on a JDK, a
         // plain boolean here) — anything but "true", in any case, is false.
         // A `null` text is FALSE, not a complaint: a JDK's `parseBoolean` is
@@ -17101,6 +17186,17 @@ fn long_static(heap: &mut Heap, method: &str, args: &[JValue]) -> Result<Option<
             }
             let radix = checked_radix(*radix)?;
             parse_unsigned_long(&text, radix)
+        }
+        ("getLong", [key, rest @ ..]) => {
+            let decoded = named_property(heap, key).and_then(|text| decode_integer(&text).ok());
+            match (decoded, rest) {
+                (Some(value), _) | (None, &[JValue::Long(value)]) => {
+                    let reference = heap.box_wrapper("java/lang/Long", JValue::Long(value));
+                    Ok(Some(JValue::Ref(Some(reference))))
+                }
+                (None, [default @ JValue::Ref(_)]) => Ok(Some(*default)),
+                _ => Ok(Some(JValue::Ref(None))),
+            }
         }
         // ...and `Long.decode` answers a `Long`, for the same reason.
         ("decode", [text @ JValue::Ref(_)]) => {

@@ -9010,12 +9010,12 @@ counting catches: a divergence that stopped being one.
 - `aCollection.spliterator()`, and the same name on `Arrays`, `Stream` and
   `IntStream` — a `Spliterator` is a parallel-decomposition handle for a
   machine with threads. (`strict_no_spliterator`)
-- `System.getProperty(...)` and the fifteen other `System` members that reach
-  for the HOST — properties, the environment, a `Console`, a native library, a
-  `SecurityManager`. caturra runs in a page with no process around it. The
-  three wrapper readers whose names read like parsers (`Integer.getInteger`,
-  `Long.getLong`, `Boolean.getBoolean`) read properties too, and go the same
-  way. (`strict_no_system_properties`)
+- `System.getProperties()` and the thirteen other `System` members that reach
+  for the HOST, or for a whole table caturra models one key at a time — the
+  properties as a `java.util.Properties`, the environment as a `Map`, a
+  `Console`, a native library, a `SecurityManager`. caturra runs in a page with
+  no process around it. (Single properties ARE modelled; see "System
+  properties".) (`strict_no_system_properties`)
 - `aClass.getAnnotations()` and the nine other annotation questions — caturra
   parses annotations and discards them, so none survives to be read back.
   Beside them, the four questions about a GENERIC signature
@@ -12562,6 +12562,47 @@ Pinned by `an_inner_class_in_a_static_context`,
 `an_inner_class_from_another_class`, `reject_a_double_switch_selector`,
 `reject_an_object_switch_selector`, `reject_a_break_outside_a_loop`,
 `reject_a_continue_outside_a_loop` and `the_switches_a_lesson_writes`.
+
+### System properties, one key at a time (2026-09-27)
+
+`System.getProperty` was refused outright ("system properties are not supported
+by caturra"), and with it `setProperty`, `clearProperty`, `getenv` and the three
+wrapper readers — `Integer.getInteger`, `Long.getLong`, `Boolean.getBoolean` —
+whose names read like parsers and are not. A program that reads a setting with
+a default (`System.getProperty("mode", "test")`) or asks for the line separator
+by name is ordinary Java, and none of it needs a host.
+
+**The properties are the program's own table** (`Heap::properties`), made on
+first use from a fixed seed: the separators (`line.separator` is `"\n"`,
+agreeing with `System.lineSeparator()`), `file.encoding` UTF-8,
+`java.specification.version` 11, and honest names for what is running
+(`java.vendor` and `java.vm.name` are `caturra`, `os.arch` is `wasm32`, the
+user is `student`, `user.dir` and `user.home` are `/`). A JDK's values come from
+the machine, so a program comparing them against a JDK's is comparing machines;
+the pins compare only what does not.
+
+- `getProperty(key)` / `getProperty(key, default)` — the default is handed back
+  as-is, null included. `setProperty` and `clearProperty` answer the value they
+  replaced.
+- The KEY is checked first, in a JDK's words: a null key is
+  `NullPointerException: key can't be null`, an empty one
+  `IllegalArgumentException: key can't be empty`. A null VALUE to
+  `setProperty` is a bare `NullPointerException`.
+- `getInteger`/`getLong` decode the value as `decode` does (`0x1F` is 31); a
+  value that does not decode, or does not FIT (`9000000000` as an `Integer`),
+  is the default — never an exception. A null or empty key is the default too.
+  Both take the default as a primitive or as a WRAPPER, and a null wrapper is
+  the answer: the argument conversion for a builtin's wrapper parameter
+  (`BParam::Boxed`) is assignment conversion, where the numeric path would have
+  unboxed it into a `NullPointerException`.
+- `Boolean.getBoolean(key)` is whether the value is `"true"` ignoring case.
+- `System.getenv(name)` answers null — caturra's environment is empty — and a
+  null name is a `NullPointerException`.
+
+Still refused, by name: `getProperties`/`setProperties` (the whole table as a
+`java.util.Properties`) and `getenv()` (the environment as a `Map`).
+
+Pinned by `system_properties_one_key_at_a_time` and `strict_no_system_properties`.
 
 ### Capturing what a program prints
 
