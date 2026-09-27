@@ -1709,6 +1709,12 @@ fn pinned_vars(
                     _ => None,
                 }
             }
+            InferSource::Slot(index, position) => match static_type_of(args.get(*index)?, ctx)? {
+                TypeRef::Generic { args, .. } if args.len() == 2 => {
+                    args.get(*position).cloned().map(boxed_element)
+                }
+                _ => None,
+            },
         });
         if let Some(pinned) = pinned {
             bound.insert(var.clone(), pinned);

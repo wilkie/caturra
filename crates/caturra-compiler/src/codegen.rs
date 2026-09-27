@@ -519,6 +519,11 @@ struct MethodSig {
     /// element an `extends` argument supplies (and every argument that IS a
     /// `T`) has to widen to every element a `super` argument accepts.
     var_wildcards: Vec<(String, usize, bool)>,
+    /// The method's OWN type variables written as a whole argument of a
+    /// container with two (`Map<K, V>`): `(variable, parameter, position)`.
+    /// Like a one-argument container, it pins its variable EXACTLY — which
+    /// the plan the parser records does not say for a map.
+    var_pins: Vec<(String, usize, usize)>,
 }
 
 impl MethodSig {
@@ -772,6 +777,27 @@ fn wildcard_over(arg: ElemType, upper: bool, table: &MethodTable) -> ElemType {
 /// parameters, a declaration the parser kept no written form for, or a
 /// parameter mentioning one of the METHOD's own variables — that one erases to
 /// its BOUND, which the erased parameter beside this already is.
+/// See [`MethodSig::var_pins`].
+fn method_var_pins(method: &MethodDecl) -> Vec<(String, usize, usize)> {
+    let mut out = Vec::new();
+    for (index, written) in method.declared_params.iter().enumerate() {
+        let TypeRef::Generic { args, .. } = written else {
+            continue;
+        };
+        if args.len() != 2 {
+            continue;
+        }
+        for (position, arg) in args.iter().enumerate() {
+            if let TypeRef::Named(name) = arg
+                && method.type_params.iter().any(|tp| tp.name == *name)
+            {
+                out.push((name.clone(), index, position));
+            }
+        }
+    }
+    out
+}
+
 /// See [`MethodSig::var_wildcards`].
 fn method_var_wildcards(method: &MethodDecl) -> Vec<(String, usize, bool)> {
     let mut out = Vec::new();
@@ -1121,6 +1147,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                     // NOT flagged `is_final` here: the dedicated check for
                     // Object's four final methods reports all of them alike
@@ -1140,6 +1167,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                     // `protected Object clone() throws CloneNotSupportedException`
                     // — reachable as `this.clone()` inside the class itself,
@@ -1158,6 +1186,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                     MethodSig {
                         name: String::from("hashCode"),
@@ -1173,6 +1202,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                     MethodSig {
                         name: String::from("equals"),
@@ -1188,6 +1218,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                 ],
                 fields: Vec::new(),
@@ -1231,6 +1262,7 @@ impl MethodTable {
                     written: Vec::new(),
                     ret_infer: None,
                     var_wildcards: Vec::new(),
+                    var_pins: Vec::new(),
                 }],
                 fields: Vec::new(),
             },
@@ -1297,6 +1329,7 @@ impl MethodTable {
                             written: Vec::new(),
                             ret_infer: None,
                             var_wildcards: Vec::new(),
+                            var_pins: Vec::new(),
                         }]
                     },
                     fields: Vec::new(),
@@ -1333,6 +1366,7 @@ impl MethodTable {
                     written: Vec::new(),
                     ret_infer: None,
                     var_wildcards: Vec::new(),
+                    var_pins: Vec::new(),
                 }],
             ),
             (
@@ -1352,6 +1386,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                     MethodSig {
                         name: String::from("next"),
@@ -1367,6 +1402,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                     // `remove()` is a DEFAULT since Java 8 — an implementor
                     // need not write one, and one that does is OVERRIDING it.
@@ -1387,6 +1423,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     },
                 ],
             ),
@@ -1455,6 +1492,7 @@ impl MethodTable {
                 written: Vec::new(),
                 ret_infer: None,
                 var_wildcards: Vec::new(),
+                var_pins: Vec::new(),
             };
             table.classes.insert(
                 String::from("Number"),
@@ -1529,6 +1567,7 @@ impl MethodTable {
                 written: Vec::new(),
                 ret_infer: None,
                 var_wildcards: Vec::new(),
+                var_pins: Vec::new(),
             };
             table.classes.insert(
                 String::from("Enum"),
@@ -1806,6 +1845,7 @@ impl MethodTable {
                             method.infer_return.clone()
                         },
                         var_wildcards: method_var_wildcards(method),
+                        var_pins: method_var_pins(method),
                     };
                     if methods
                         .iter()
@@ -1848,6 +1888,7 @@ impl MethodTable {
                         written: Vec::new(),
                         ret_infer: None,
                         var_wildcards: Vec::new(),
+                        var_pins: Vec::new(),
                     });
                 }
 
@@ -8232,7 +8273,8 @@ fn join_sources(
         let (InferSource::Direct(index)
         | InferSource::Element(index)
         | InferSource::LambdaResult(index)
-        | InferSource::ElementResult(index, _)) = source;
+        | InferSource::ElementResult(index, _)
+        | InferSource::Slot(index, _)) = source;
         let &arg = arg_types.get(index)?;
         // For a container parameter it is the ELEMENT that pins the variable:
         // `max(List<String>)` returns a String, not a `List<String>`.
@@ -8247,6 +8289,7 @@ fn join_sources(
             InferSource::ElementResult(_, position) => {
                 element_result(TypeArgs::of(arg).first?, position, table)?
             }
+            InferSource::Slot(_, position) => slot_type(arg, position)?,
         };
         let reference = match boxable_primitive(arg) {
             Some(elem) => JType::Boxed(elem),
@@ -8301,6 +8344,18 @@ fn later_arguments_agree(
             }
             _ => true,
         })
+}
+
+/// A two-argument container's type argument at `position` — a map's key
+/// (0) or value (1) — as the type it stands for.
+fn slot_type(container: JType, position: usize) -> Option<JType> {
+    let args = TypeArgs::of(container);
+    let slot = if position == 0 {
+        args.first
+    } else {
+        args.second
+    };
+    Some(slot?.base_type())
 }
 
 /// Two faces of the SAME collection type joined at the face both are: a
@@ -32763,7 +32818,8 @@ impl BodyGen<'_> {
             let (InferSource::Direct(index)
             | InferSource::Element(index)
             | InferSource::LambdaResult(index)
-            | InferSource::ElementResult(index, _)) = source;
+            | InferSource::ElementResult(index, _)
+            | InferSource::Slot(index, _)) = source;
             let &arg = arg_types.get(index)?;
             // A `null` pins nothing: it converts to whatever the others say,
             // and when nothing else speaks the variable is `Object` — javac's
@@ -32779,6 +32835,7 @@ impl BodyGen<'_> {
                 InferSource::ElementResult(_, position) => {
                     element_result(TypeArgs::of(arg).first?, position, self.table)?
                 }
+                InferSource::Slot(_, position) => slot_type(arg, position)?,
             };
             let reference = match boxable_primitive(arg) {
                 Some(elem) => JType::Boxed(elem),
@@ -36275,6 +36332,11 @@ impl BodyGen<'_> {
             let actual = self.expr_toward(arg, param_ty);
             if matches!(param_ty, JType::Boxed(_))
                 || param_ty == JType::Object(self.table.object_id)
+                // ...and so does any other CLASS a primitive boxes into: a
+                // `List<Number>` stored a bare int, which then reached a
+                // reference position as one — `println(numbers.get(0))` was a
+                // VerifyError.
+                || (matches!(param_ty, JType::Object(_)) && boxable_primitive(actual).is_some())
             {
                 // `numeric_conversion` unboxes a wrapper argument but never
                 // boxes a primitive one, which `Map.put(K, V)` needs.
@@ -39366,7 +39428,35 @@ impl BodyGen<'_> {
             }
             self.code.push_op(op::ALOAD_0, 1);
             let owner = self.current_class_id;
-            let result = self.emit_virtual_call_on_stacked_receiver(owner, method, args, span)?;
+            // Inside a generic class, `this` is a `Bag<T>`: its own method's
+            // `T` parameter takes a `T`, not anything at all. Without the
+            // class's own variables as the receiver's arguments the erased
+            // `Object` stood in, and `add(1)` in a `Bag<T>` compiled where
+            // javac says "int cannot be converted to T".
+            let own_vars = self.receiver_args.is_none()
+                && self
+                    .table
+                    .declaring_class(self.table.class_name(owner), method)
+                    .as_deref()
+                    == Some(self.table.class_name(owner));
+            let count = self
+                .table
+                .info_by_id(owner)
+                .map_or(0, |info| info.type_param_count);
+            let outer = if own_vars && count > 0 {
+                let rest: Vec<ElemType> = (1..count)
+                    .filter_map(|index| u8::try_from(index).ok().map(ElemType::TypeVar))
+                    .collect();
+                let rest = self.table.intern_type_args(&rest);
+                Some(self.receiver_args.replace((ElemType::TypeVar(0), rest)))
+            } else {
+                None
+            };
+            let result = self.emit_virtual_call_on_stacked_receiver(owner, method, args, span);
+            if let Some(outer) = outer {
+                self.receiver_args = outer;
+            }
+            let result = result?;
             // The same substitution an explicit receiver gets: a subclass that
             // FIXED a generic supertype's argument reads what it inherits as
             // that argument, inside its own body too.
@@ -41982,6 +42072,32 @@ impl BodyGen<'_> {
                 let Some(exact) = element(*index) else {
                     continue;
                 };
+                match pinned {
+                    None => pinned = Some(exact),
+                    Some(seen) if seen == exact => {}
+                    Some(_) => return Some(name),
+                }
+            }
+            // ...and a two-argument container, at its variable's position.
+            for (var, index, position) in &sig.var_pins {
+                if var != name || args.get(*index).is_some_and(mints_a_collection) {
+                    continue;
+                }
+                let Some(&ty) = arg_types.get(*index) else {
+                    continue;
+                };
+                let type_args = TypeArgs::of(ty);
+                let slot = if *position == 0 {
+                    type_args.first
+                } else {
+                    type_args.second
+                };
+                let Some(exact) = slot.map(|elem| elem_value_type(elem, self.table)) else {
+                    continue;
+                };
+                if exact == JType::Object(self.table.object_id) {
+                    continue;
+                }
                 match pinned {
                     None => pinned = Some(exact),
                     Some(seen) if seen == exact => {}
@@ -48638,6 +48754,12 @@ impl BodyGen<'_> {
     fn typevar_target(&self, index: u8) -> Option<JType> {
         if let Some((arg, rest)) = self.receiver_args {
             let elem = self.table.type_arg(arg, rest, index)?;
+            // The receiver is `this` inside the declaring class: the argument
+            // IS the class's own variable, and only a value of that variable
+            // (or null) converts to it.
+            if let ElemType::TypeVar(own) = elem {
+                return Some(JType::TypeVar(own));
+            }
             return Some(elem_value_type(elem, self.table));
         }
         self.table
@@ -48875,7 +48997,10 @@ impl BodyGen<'_> {
             if let JType::TypeVar(index) = to
                 && let Some(elem) = boxable_primitive(from)
                 && self.typevar_target(index).is_none_or(|want| {
-                    self.receiver_args.is_none() || widens(JType::Boxed(elem), want, self.table)
+                    self.receiver_args.is_none()
+                        // The class's own variable: a boxed value is not one.
+                        || (!matches!(want, JType::TypeVar(_))
+                            && widens(JType::Boxed(elem), want, self.table))
                 })
             {
                 self.emit_box(elem);
@@ -49095,9 +49220,12 @@ impl BodyGen<'_> {
             // the class) the variable's erasure is its bound, which is what
             // javac checks against.
             (_, JType::TypeVar(index))
-                if self
-                    .typevar_target(index)
-                    .is_some_and(|want| widens(from, want, self.table)) => {}
+                if self.typevar_target(index).is_some_and(|want| match want {
+                    // The class's own variable, inside its own body: only a
+                    // value of that variable, or null, is one.
+                    JType::TypeVar(_) => from == want || from == JType::Null,
+                    _ => widens(from, want, self.table),
+                }) => {}
             // ...and REFUSES what it does not. The erasure says `Object`, and
             // the permissive rule beside it (any reference stores into a `T`)
             // then accepted every value in the language: `Bag<String> b;

@@ -9220,19 +9220,6 @@ counting catches: a divergence that stopped being one.
   — is stated on the types alone, and the types cannot tell an inference site
   from an assignment. Explained where it was introduced and never counted
   here. (`loose_a_nested_argument_widens_between_variables`)
-- A generic method's variable pinned by a TWO-argument container:
-  `static <K, V> void put(Map<K, V> into, K key, V value)` called as
-  `put(mapOfStringInteger, 1, 2)`. A container parameter pins its variable
-  exactly, and the check reads that pin — but the plan the parser records
-  names a variable only for a container with ONE argument, so a map pins
-  nothing and the key goes unchecked. Refusing on a guess would be worse than
-  the missing check. (`loose_a_variable_pinned_by_a_map_parameter`)
-- A type variable used INSIDE its own class: `class Bag<T> { void add(T v);
-  void seed() { add(1); } }`. There is no receiver to read an argument from,
-  so the variable stands for its BOUND, and a `T` whose bound is `Object`
-  takes anything. javac checks against the variable itself, which admits only
-  a `T`. Every call from OUTSIDE the class is checked against the receiver's
-  own argument. (`loose_a_type_variable_inside_its_own_class`)
 
 It held a worse one on 2026-08-13: a cast to `String` accepted ANY reference
 source, so `(String) Integer.valueOf(1)`, `(String) aStringBuilder` and
@@ -15858,6 +15845,38 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `a_class_that_extends_number`, `string_value_of_a_type_variable`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
+
+### Two accepts-invalid pins closed, and a `List<Number>` that crashed (2026-09-26)
+
+Both remaining `loose_` generics pins — programs caturra accepted and javac
+refuses — are closed:
+
+- **A type variable inside its own class.** In a `Bag<T>`, `this` is a
+  `Bag<T>`: its own `add(T)` takes a `T` (or null) and nothing else. The call
+  had no receiver arguments to read, so `T` stood for its erased bound and
+  `seed() { add(1); }` compiled. An implicit-`this` call to a method the class
+  itself declares now carries the class's own variables as its receiver's
+  arguments, and a variable converts only from itself — boxing included
+  (`int cannot be converted to T`, javac's words) (`a_type_variable_inside_its_own_class`,
+  and `calls_inside_a_generic_class` for what still converts).
+- **A variable pinned by a map.** `<K, V> void put(Map<K, V>, K, V)` with a
+  `Map<String, Integer>` pins `K` to `String` exactly; only a one-argument
+  container pinned before (`MethodSig::var_pins`,
+  `a_variable_pinned_by_a_map_parameter`). The same position now TYPES a
+  result: `InferSource::Slot` reads a two-argument container's type argument,
+  so `<K, V> V get(Map<K, V>, K)` answers the map's value type and
+  `get(m, "a") + 1` is arithmetic, where it was "bad operand types" on an
+  `Object` (`a_map_types_a_generic_result`).
+
+Probing that result found an engine failure in ordinary code: **a primitive
+stored in a `List<Number>`** (or a `Map<String, Number>`, a `Queue<Number>`…)
+was stored as a bare int, because the builtin call boxed an argument only for
+a wrapper or an exact `Object` parameter; the first reference use of the
+element — `System.out.println(list.get(0))`, `Object o = list.get(0)` — was a
+VerifyError. Any class a primitive boxes into now boxes at that boundary
+(`a_container_of_numbers`, across every way a container is filled). A new
+`classdump` example (`cargo run --example classdump -- out/ File.java`) writes
+the class files caturra emits, for `javap`.
 
 ### SwingWorker, java.beans, and an anonymous class inside a lambda (2026-09-26)
 

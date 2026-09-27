@@ -5986,6 +5986,15 @@ fn infer_return_plan(
                 [element] if crate::ast::functional_result_position(base, 1).is_none() => {
                     element_result_source(index, element, ret_var)
                 }
+                // `Map<K, V>` — the variable at a POSITION of a two-argument
+                // container (not a functional interface, whose last argument
+                // is its result and is read below).
+                [first, second] if crate::ast::functional_result_position(base, 2).is_none() => {
+                    [first, second]
+                        .iter()
+                        .position(|arg| matches!(arg, TypeRef::Named(name) if name == ret_var))
+                        .map(|position| InferSource::Slot(index, position))
+                }
                 // A functional interface whose RESULT is the variable
                 // (`Function<T, R> f`): the lambda's own body is the only
                 // thing that pins it, and the lambda pass records what that

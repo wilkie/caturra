@@ -49524,11 +49524,14 @@ public class StrictNested {\n\
   }\n}"
 );
 
-looser_than_javac!(
-    loose_a_variable_pinned_by_a_map_parameter,
-    "LooseMapVar",
+// A generic method's variable pinned by a MAP parameter: `put(Map<K, V>, K, V)`
+// with a `Map<String, Integer>` makes `K` a `String`, exactly — so a key of 1
+// is refused, as javac refuses it. Only a one-argument container pinned before.
+differential_wording!(
+    a_variable_pinned_by_a_map_parameter,
+    "MapPinnedVar",
     "import java.util.*;\n\
-public class LooseMapVar {\n\
+public class MapPinnedVar {\n\
   static <K, V> void put(Map<K, V> into, K key, V value) { into.put(key, value); }\n\
   public static void main(String[] args) {\n\
     Map<String, Integer> m = new HashMap<>();\n\
@@ -49537,11 +49540,82 @@ public class LooseMapVar {\n\
   }\n}"
 );
 
-looser_than_javac!(
-    loose_a_type_variable_inside_its_own_class,
-    "LooseOwnVar",
+// ...and a map's key and value TYPE a generic method's result: `get(map, k)`
+// returns the value type, so `get(m, "a") + 1` is arithmetic, not "bad operand
+// types" on an `Object`.
+differential_test!(
+    a_map_types_a_generic_result,
+    "MapTypedResult",
+    r#"
+import java.util.*;
+
+public class MapTypedResult {
+    static <K, V> V get(Map<K, V> from, K key) { return from.get(key); }
+    static <K, V> K firstKey(Map<K, V> from) { return from.keySet().iterator().next(); }
+    static <K, V> void put(Map<K, V> into, K key, V value) { into.put(key, value); }
+
+    public static void main(String[] args) {
+        Map<String, Integer> m = new HashMap<>();
+        put(m, "a", 1);
+        put(m, "b", null);
+        Map<Object, Object> objs = new HashMap<>();
+        put(objs, 1, "x");
+        Map<String, Number> nums = new HashMap<>();
+        put(nums, "k", 2.5);
+        Integer i = get(m, "a");
+        System.out.println(get(m, "a") + 1 + " " + i + " " + firstKey(m).length() + " " + get(nums, "k") + " " + objs);
+    }
+}
+"#
+);
+
+// A primitive stored in a container of `Number` (or of any class a wrapper
+// widens to) is BOXED at the boundary, as it is for `Object`: it was stored
+// as a bare int, and the first reference use of it — `println(list.get(0))` —
+// was a VerifyError.
+differential_test!(
+    a_container_of_numbers,
+    "NumberContainers",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+public class NumberContainers {
+    public static void main(String[] args) {
+        List<Number> l = new ArrayList<>();
+        l.add(1); l.add(0, 2.5); l.set(1, 3L); l.addAll(Arrays.asList(4, 5.5f));
+        Collections.addAll(l, 6, 7.25);
+        ListIterator<Number> it = l.listIterator(); it.next(); it.set(8); it.add(9);
+        Object first = l.get(0);
+        System.out.println(l + " " + first + " " + first.getClass().getSimpleName());
+        Set<Number> s = new TreeSet<>(Comparator.comparingDouble(Number::doubleValue)); s.add(3); s.add(1.5);
+        Queue<Number> q = new ArrayDeque<>(); q.offer(10); q.add(11.5);
+        Deque<Number> d = new ArrayDeque<>(); d.push(12); d.addFirst(13); d.offerLast(14.5);
+        Map<Number, Number> m = new HashMap<>(); m.put(1, 2); m.putIfAbsent(3, 4.5); m.merge(1, 10, (a, b) -> a.intValue() + b.intValue());
+        Number[] arr = {1, 2.5}; arr[0] = 3;
+        Object[] objs = {1, 'c', true}; objs[0] = 2L;
+        List<Number> fixed = List.of(1, 2.5);
+        List<Number> mapped = Stream.of(1, 2, 3).map(x -> (Number) x).collect(Collectors.toList());
+        Optional<Number> opt = Optional.of(5);
+        System.out.println(s + " " + q + " " + d + " " + m + " " + Arrays.toString(arr) + " " + Arrays.toString(objs));
+        System.out.println(fixed + " " + mapped + " " + opt.get() + " " + q.peek() + " " + d.pop());
+        for (Number n : l) System.out.print(n + ":" + n.getClass().getSimpleName() + " ");
+        System.out.println();
+        Object o = m.get(3);
+        System.out.println(o + " " + (o instanceof Double) + " " + arr[0].getClass().getSimpleName());
+    }
+}
+"#
+);
+
+// A type variable used INSIDE its own class: `this` is a `Bag<T>`, so its own
+// `add(T)` takes a `T` — or null — and nothing else. The call inside the class
+// had no receiver arguments to read, so the variable stood for its erased
+// bound and `add(1)` compiled.
+differential_wording!(
+    a_type_variable_inside_its_own_class,
+    "OwnVarInside",
     "import java.util.*;\n\
-public class LooseOwnVar {\n\
+public class OwnVarInside {\n\
   static class Bag<T> {\n\
     List<T> items = new ArrayList<>();\n\
     void add(T value) { items.add(value); }\n\
@@ -49552,6 +49626,46 @@ public class LooseOwnVar {\n\
     b.seed();\n\
     System.out.println(b.items);\n\
   }\n}"
+);
+
+// ...and what a `T` IS still converts: a `T` value, a read of a `List<T>`,
+// null, a two-variable class's own pair.
+differential_test!(
+    calls_inside_a_generic_class,
+    "OwnVariables",
+    r#"
+import java.util.*;
+public class OwnVariables {
+    static class Bag<T> {
+        List<T> items = new ArrayList<>();
+        void add(T value) { items.add(value); }
+        T first() { return items.get(0); }
+        void again() { add(first()); add(null); T x = first(); add(x); }
+        <U> void both(T t, U u) { add(t); }
+        void copyFrom(Bag<T> other) { for (T t : other.items) add(t); }
+    }
+    static class Pair<A, B> {
+        A a; B b;
+        void set(A a, B b) { this.a = a; this.b = b; }
+        void swapInto(Pair<B, A> other) { other.set(b, a); }
+        void reset() { set(a, b); set(null, b); }
+    }
+    static class Num<N extends Number> {
+        N n;
+        void put(N value) { n = value; }
+        double twice() { put(n); return n.doubleValue() * 2; }
+    }
+    public static void main(String[] args) {
+        Bag<String> b = new Bag<>();
+        b.add("x"); b.again(); b.both("y", 3);
+        Bag<String> c = new Bag<>(); c.copyFrom(b);
+        Pair<String, Integer> p = new Pair<>(); p.set("s", 1); p.reset();
+        Pair<Integer, String> q = new Pair<>(); p.swapInto(q);
+        Num<Integer> n = new Num<>(); n.put(4);
+        System.out.println(b.items + " " + c.items + " " + p.a + p.b + " " + q.a + q.b + " " + n.twice());
+    }
+}
+"#
 );
 
 stricter_than_javac!(

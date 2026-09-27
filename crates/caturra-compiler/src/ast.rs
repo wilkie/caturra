@@ -163,6 +163,12 @@ pub enum InferSource {
     /// it is the argument's ELEMENT type's argument at that position — a
     /// `List<Callable<String>>` answers `String`.
     ElementResult(usize, usize),
+    /// The parameter is a two-argument container with the variable at a
+    /// POSITION: `<K, V> V get(Map<K, V> m, K k)`. The argument's type
+    /// argument at that position pins it — a `Map<String, Integer>` answers
+    /// `Integer` for position 1. Only ONE argument was ever read, so a map's
+    /// value came back `Object`.
+    Slot(usize, usize),
 }
 
 /// The functional interfaces whose RESULT is their last type argument, and how
