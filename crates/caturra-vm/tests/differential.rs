@@ -65010,3 +65010,130 @@ public class ExtendsFinal {
 }
 "#
 );
+
+// The LRU cache: a `LinkedHashMap` subclass in ACCESS order whose
+// `removeEldestEntry` evicts. Which calls count as an access (`get`,
+// `getOrDefault`, a write to an existing key — `containsKey` does not), when
+// the eldest is asked about (after every insertion, with the size after it,
+// `putAll` once per entry), and the JDK's refusals of a bad capacity or load
+// factor.
+differential_test!(
+    lru_cache,
+    "LruCache",
+    r##"
+import java.util.*;
+
+public class LruCache {
+    static class Cache<K, V> extends LinkedHashMap<K, V> {
+        private final int cap;
+        final List<String> asked = new ArrayList<>();
+        Cache(int cap) { super(16, 0.75f, true); this.cap = cap; }
+        @Override protected boolean removeEldestEntry(Map.Entry<K, V> eldest) {
+            asked.add(eldest.getKey() + "=" + eldest.getValue() + "/" + size());
+            return size() > cap;
+        }
+    }
+
+    static void t(String label, Runnable r) {
+        try { r.run(); } catch (RuntimeException e) { System.out.println(label + " ! " + e.getClass().getSimpleName()); }
+    }
+
+    public static void main(String[] args) {
+        Cache<String, Integer> c = new Cache<>(3);
+        c.put("a", 1); c.put("b", 2); c.put("c", 3);
+        System.out.println(c + " " + c.asked);
+        c.get("a");
+        System.out.println(c);
+        c.put("d", 4);
+        System.out.println(c + " " + c.asked);
+        c.put("b", 20);
+        System.out.println(c);
+        c.getOrDefault("c", 0); c.getOrDefault("zz", 0);
+        System.out.println(c);
+        c.putIfAbsent("d", 9); System.out.println("pia " + c);
+        c.putIfAbsent("e", 5); System.out.println("pia2 " + c + " " + c.asked);
+        c.replace("b", 21); System.out.println("rep " + c);
+        c.merge("c", 1, Integer::sum); System.out.println("merge " + c);
+        c.compute("d", (k, v) -> v == null ? 0 : v + 1); System.out.println("compute " + c);
+        c.computeIfAbsent("f", k -> 6); System.out.println("cia " + c + " " + c.asked);
+        c.computeIfPresent("e", (k, v) -> v + 100); System.out.println("cip " + c);
+        c.containsKey("b"); c.containsValue(21); System.out.println("contains " + c);
+        c.remove("zz");
+        System.out.println(c.keySet() + " " + c.values() + " " + c.entrySet());
+        t("cme-get", () -> { for (String k : c.keySet()) c.get(k); });
+        Map<String, Integer> plain = new LinkedHashMap<>(4, 0.5f, true);
+        plain.put("x", 1); plain.put("y", 2); plain.get("x");
+        System.out.println(plain + " " + plain.getClass().getSimpleName());
+        Map<String, Integer> ins = new LinkedHashMap<>(4, 0.5f, false);
+        ins.put("x", 1); ins.put("y", 2); ins.get("x");
+        System.out.println(ins);
+        Map<Integer, Integer> h = new HashMap<>(64, 0.9f);
+        for (int i = 20; i > 0; i -= 3) h.put(i * 7, i);
+        System.out.println(h);
+        Set<String> hs = new HashSet<>(2, 0.5f); hs.add("q"); hs.add("r");
+        Set<String> lhs = new LinkedHashSet<>(2, 0.5f); lhs.add("r"); lhs.add("q");
+        System.out.println(hs + " " + lhs);
+        t("bad-lf", () -> new HashMap<String, Integer>(4, 0f));
+        t("bad-cap", () -> new HashMap<String, Integer>(-1, 0.75f));
+        c.putAll(Map.of("g", 7));
+        System.out.println("putAll " + c + " " + c.asked.size());
+        Cache<String, Integer> tiny = new Cache<>(1);
+        tiny.put("p", 1); tiny.put("q", 2);
+        System.out.println(tiny + " " + tiny.asked);
+    }
+}
+"##
+);
+
+// ...the anonymous form, a load factor that decides when the table doubles
+// (and so the ORDER), an entry's `setValue` and `replaceAll` that do NOT count
+// as an access, and a `get` inside a walk of an access-ordered map, which is a
+// structural change — except of the entry already last.
+differential_test!(
+    access_ordered_maps,
+    "AccessOrderedMaps",
+    r##"
+import java.util.*;
+
+public class AccessOrderedMaps {
+    public static void main(String[] args) {
+        final int max = 3;
+        Map<Integer, String> cache = new LinkedHashMap<Integer, String>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<Integer, String> eldest) {
+                return size() > max;
+            }
+        };
+        for (int i = 1; i <= 5; i++) { cache.put(i, "v" + i); if (i == 3) cache.get(1); }
+        System.out.println(cache + " " + cache.getClass().getName() + " " + (cache instanceof LinkedHashMap));
+        Map<String, Integer> fifo = new LinkedHashMap<>() {
+            protected boolean removeEldestEntry(Map.Entry<String, Integer> e) { return size() > 2; }
+        };
+        fifo.put("a", 1); fifo.put("b", 2); fifo.get("a"); fifo.put("c", 3);
+        System.out.println(fifo);
+        for (float lf : new float[] {0.25f, 0.5f, 1.0f, 2.0f, 0.1f}) {
+            Map<Integer, Integer> m = new HashMap<>(2, lf);
+            for (int k = 0; k < 40; k += 3) m.put(k * 13, k);
+            Set<Integer> s = new HashSet<>(1, lf);
+            for (int k = 0; k < 40; k += 5) s.add(k * 17);
+            System.out.println(lf + " " + m.keySet() + " " + s);
+        }
+        LinkedHashMap<String, Integer> ao = new LinkedHashMap<>(8, 0.75f, true);
+        ao.put("x", 1); ao.put("y", 2); ao.put("z", 3);
+        ao.get("x"); ao.get("z");
+        for (Map.Entry<String, Integer> e : ao.entrySet()) e.setValue(e.getValue() * 10);
+        System.out.println(ao);
+        ao.replaceAll((k, v) -> v + 1);
+        System.out.println(ao + " " + ao.keySet().iterator().next());
+        Iterator<String> it = ao.keySet().iterator();
+        it.next();
+        ao.get(it.next());
+        try { it.next(); System.out.println("no cme"); } catch (ConcurrentModificationException e) { System.out.println("cme"); }
+        ao.get("x");
+        Iterator<String> it2 = ao.keySet().iterator();
+        while (it2.hasNext()) if (it2.next().equals("y")) ao.get("x");
+        System.out.println("last-get ok " + ao);
+    }
+}
+"##
+);

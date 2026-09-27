@@ -34883,8 +34883,27 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> JType {
-        if args.len() > 1 {
-            self.error(span, "HashMap takes at most one constructor argument");
+        // `(capacity, loadFactor)` on a `HashMap`/`LinkedHashMap`, and the
+        // `LinkedHashMap`'s `(capacity, loadFactor, accessOrder)`.
+        let simple = class.rsplit('/').next().unwrap_or(class);
+        let most = match simple {
+            "HashMap" => 2,
+            "LinkedHashMap" => 3,
+            _ => 1,
+        };
+        if args.len() > most {
+            self.error(
+                span,
+                format!(
+                    "{simple} takes at most {} constructor argument{}",
+                    match most {
+                        1 => "one",
+                        2 => "two",
+                        _ => "three",
+                    },
+                    if most == 1 { "" } else { "s" }
+                ),
+            );
             return JType::Error;
         }
         let mut entry = match type_args {
@@ -34946,7 +34965,14 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2); // the dup'd receiver + the argument
             }
-            _ => unreachable!("arg count checked above"),
+            sizing => {
+                self.sizing_constructor_args(sizing);
+                let descriptor = if sizing.len() == 3 { "(IFZ)V" } else { "(IF)V" };
+                let init_ref = intern_method_ref(self.pool, class, "<init>", descriptor);
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code
+                    .drop_stack(1 + u16::try_from(sizing.len()).unwrap_or(0));
+            }
         }
         // The `new` makes the CLASS — and a `Hashtable` is its own type, not
         // a face of the hash map it shares a table with.
@@ -34958,6 +34984,17 @@ impl BodyGen<'_> {
             key,
             value,
             face: CollFace::written(class.rsplit('/').next().unwrap_or(class)),
+        }
+    }
+
+    /// The arguments of a hashed collection's SIZING constructor — an `int`
+    /// capacity, a `float` load factor, and a `LinkedHashMap`'s `boolean`
+    /// access order — each converted as an assignment to that type is.
+    fn sizing_constructor_args(&mut self, args: &[Expr]) {
+        for (arg, ty) in args.iter().zip([JType::Int, JType::Float, JType::Boolean]) {
+            let actual = self.expr(arg);
+            let constant = self.const_int(arg);
+            self.convert_value(arg, actual, ty, constant);
         }
     }
 
@@ -35507,8 +35544,13 @@ impl BodyGen<'_> {
         args: &[Expr],
         span: SourceSpan,
     ) -> JType {
-        if args.len() > 1 {
-            self.error(span, "HashSet takes at most one constructor argument");
+        // `(capacity, loadFactor)`, as a `HashMap`'s.
+        if args.len() > 2 {
+            let simple = class.rsplit('/').next().unwrap_or(class);
+            self.error(
+                span,
+                format!("{simple} takes at most two constructor arguments"),
+            );
             return JType::Error;
         }
         let mut elem = match type_args {
@@ -35562,7 +35604,12 @@ impl BodyGen<'_> {
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(2); // the dup'd receiver + the argument
             }
-            _ => unreachable!("arg count checked above"),
+            sizing => {
+                self.sizing_constructor_args(sizing);
+                let init_ref = intern_method_ref(self.pool, class, "<init>", "(IF)V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(3);
+            }
         }
         // The `new` makes the CLASS it names — a `LinkedHashSet` is a
         // `HashSet`, and a `HashSet` is not one.

@@ -4114,6 +4114,41 @@ pub fn invoke_special(
         // The two figures are recorded by the interpreter (which owns the side
         // map); nothing else to do.
         ("<init>", "(II)V") if matches!(heap.get(receiver), Some(HeapObject::Stack(_))) => Ok(()),
+        // `new HashMap<>(capacity, loadFactor)` and `LinkedHashMap`'s
+        // `(capacity, loadFactor, accessOrder)` — the two figures checked in
+        // the JDK's order and words, the load factor kept (it decides when the
+        // table doubles), and an access-ordered map marked.
+        ("<init>", "(IF)V" | "(IFZ)V")
+            if matches!(heap.get(receiver),
+                Some(HeapObject::HashMap(map) | HeapObject::HashSet(map))
+                    if !map.is_concurrent() && !map.is_hashtable()) =>
+        {
+            let (JValue::Int(capacity), JValue::Float(factor)) = (args[0], args[1]) else {
+                return Err(throw("java.lang.VerifyError: expected (int, float)"));
+            };
+            let access_order = matches!(args.get(2), Some(JValue::Int(1)));
+            if capacity < 0 {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: Illegal initial capacity: {capacity}"
+                )));
+            }
+            if factor.is_nan() || factor <= 0.0 {
+                return Err(throw(format!(
+                    "java.lang.IllegalArgumentException: Illegal load factor: {}",
+                    java_float_to_string(factor)
+                )));
+            }
+            if let Some(HeapObject::HashMap(map) | HeapObject::HashSet(map)) =
+                heap.get_mut(receiver)
+            {
+                let linked = map.is_linked();
+                *map = JavaHashMap::with_capacity_hint(capacity)
+                    .as_linked(linked)
+                    .with_load_factor(factor)
+                    .in_access_order(access_order);
+            }
+            Ok(())
+        }
         ("<init>", "(I)V") => {
             let JValue::Int(capacity) = args[0] else {
                 return Err(throw("java.lang.VerifyError: expected an int argument"));

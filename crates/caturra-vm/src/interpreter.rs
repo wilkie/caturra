@@ -9541,6 +9541,32 @@ impl<'run> Interpreter<'run> {
             _ => return Ok(Answered::No),
         }
 
+        // A `LinkedHashMap`'s two hooks: an ACCESS to an existing mapping
+        // (`afterNodeAccess`, which moves it to the end of an access-ordered
+        // map) and an INSERTION of a new one (`afterNodeInsertion`, which asks
+        // `removeEldestEntry`). Read as whether the key was there before the
+        // call and whether the map grew.
+        let hooked = matches!(
+            method_name,
+            "get"
+                | "getOrDefault"
+                | "put"
+                | "putIfAbsent"
+                | "replace"
+                | "merge"
+                | "compute"
+                | "computeIfAbsent"
+                | "computeIfPresent"
+        ) && !args.is_empty()
+            && self.map_has_hooks(receiver);
+        let (existed, len_before) = if hooked {
+            (
+                self.map_find(receiver, args[0])?.is_some(),
+                self.map_len(receiver),
+            )
+        } else {
+            (false, 0)
+        };
         let result = match (method_name, args) {
             ("size", []) => JValue::Int(i32::try_from(self.map_len(receiver)).unwrap_or(i32::MAX)),
             // A `ConcurrentHashMap`'s size as a long.
@@ -9830,8 +9856,20 @@ impl<'run> Interpreter<'run> {
                 JValue::Int(i32::from(replaced))
             }
             ("putAll", [JValue::Ref(Some(source))]) => {
+                // Each entry is a `put`, hooks and all.
+                let hooks = self.map_has_hooks(receiver);
                 for (key, value) in self.map_entries(*source) {
+                    let existing = if hooks {
+                        self.map_find(receiver, key)?
+                    } else {
+                        None
+                    };
                     self.map_put(receiver, key, value)?;
+                    if let Some(at) = existing {
+                        self.map_accessed(receiver, at);
+                    } else if hooks {
+                        self.map_inserted(receiver)?;
+                    }
                 }
                 return Ok(Answered::Void);
             }
@@ -9859,7 +9897,95 @@ impl<'run> Interpreter<'run> {
                 )));
             }
         };
+        if hooked {
+            // `replace(k, expected, v)` touches the mapping only when it
+            // really replaced.
+            let touched =
+                !(method_name == "replace" && args.len() == 3 && result == JValue::Int(0));
+            if existed && touched {
+                if let Some(at) = self.map_find(receiver, args[0])? {
+                    self.map_accessed(receiver, at);
+                }
+            } else if !existed && self.map_len(receiver) > len_before {
+                self.map_inserted(receiver)?;
+            }
+        }
         Ok(Answered::Value(result))
+    }
+
+    /// Whether a map has either `LinkedHashMap` hook to run: it keeps ACCESS
+    /// order, or it is an instance of a program class that overrides
+    /// `removeEldestEntry`.
+    fn map_has_hooks(&self, map: HeapRef) -> bool {
+        use crate::value::HeapObject;
+        let Some(HeapObject::HashMap(table)) = self.heap.get(map) else {
+            return false;
+        };
+        table.is_access_ordered()
+            || self.heap.extension(map).is_some_and(|extension| {
+                resolve_erased_override(
+                    self.classes,
+                    &extension.class_name,
+                    "removeEldestEntry",
+                    "(Ljava/util/Map$Entry;)Z",
+                )
+                .is_some()
+            })
+    }
+
+    /// `afterNodeAccess`: an access-ordered map moves the mapping to its end
+    /// — a STRUCTURAL change a JDK counts, so a `get` inside a for-each over
+    /// the same map throws — unless it is already last.
+    fn map_accessed(&mut self, map: HeapRef, at: usize) {
+        use crate::value::HeapObject;
+        let moves = matches!(self.heap.get(map), Some(HeapObject::HashMap(table))
+            if table.is_access_ordered() && at + 1 < table.len());
+        if moves {
+            if let Some(HeapObject::HashMap(table)) = self.heap.get_mut(map) {
+                table.move_to_end(at);
+            }
+            self.heap.bump_mod_count(map);
+        }
+    }
+
+    /// `afterNodeInsertion`: a program class's `removeEldestEntry` is asked
+    /// about the eldest mapping, and a `true` removes it.
+    fn map_inserted(&mut self, map: HeapRef) -> Result<(), VmError> {
+        use crate::value::HeapObject;
+        let Some(extension) = self.heap.extension(map) else {
+            return Ok(());
+        };
+        let class_name = extension.class_name.clone();
+        let Some((class, method)) = resolve_erased_override(
+            self.classes,
+            &class_name,
+            "removeEldestEntry",
+            "(Ljava/util/Map$Entry;)Z",
+        ) else {
+            return Ok(());
+        };
+        let eldest = match self.heap.get(map) {
+            Some(HeapObject::HashMap(table)) if !table.is_empty() => {
+                table.key_at(table.iteration_order()[0])
+            }
+            _ => return Ok(()),
+        };
+        let entry = self.heap.alloc(HeapObject::MapEntry {
+            map,
+            key: eldest,
+            read_only: false,
+        });
+        let callee = self.make_frame(
+            class,
+            method,
+            vec![JValue::Ref(Some(map)), JValue::Ref(Some(entry))],
+        )?;
+        if matches!(self.run_nested(callee)?, Some(JValue::Int(1)))
+            && let Some(at) = self.map_find(map, eldest)?
+        {
+            self.map_remove_at(map, at);
+        }
+        Ok(())
     }
 
     /// `java.util.HashSet`. Backed by a [`crate::map::JavaHashMap`] keyed on the

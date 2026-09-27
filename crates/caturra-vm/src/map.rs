@@ -91,6 +91,12 @@ pub struct JavaHashMap {
     /// bucket order is derived on top for a `HashMap` — so the whole
     /// difference between the two classes is whether that derivation runs.
     linked: bool,
+    /// A `LinkedHashMap` in ACCESS order (`new LinkedHashMap<>(16, 0.75f,
+    /// true)`): a read or a write of an existing mapping moves it to the end.
+    access_order: bool,
+    /// The load factor a constructor asked for, when it is not the default
+    /// 0.75 — it decides when the table doubles, and so the bucket order.
+    load_factor: Option<f32>,
     /// A `java.util.Hashtable`: a table of 11 buckets growing by `2n + 1`,
     /// walked from the LAST bucket DOWN, each chain newest first. Nothing like
     /// a `HashMap`'s order, and just as observable.
@@ -246,6 +252,64 @@ impl JavaHashMap {
         self
     }
 
+    /// `new LinkedHashMap<>(capacity, loadFactor, accessOrder)`.
+    #[must_use]
+    pub fn in_access_order(mut self, access_order: bool) -> Self {
+        self.access_order = access_order;
+        self
+    }
+
+    #[must_use]
+    pub fn is_access_ordered(&self) -> bool {
+        self.access_order && self.linked
+    }
+
+    /// A load factor other than 0.75.
+    #[must_use]
+    pub fn with_load_factor(mut self, load_factor: f32) -> Self {
+        #[allow(clippy::float_cmp)]
+        if load_factor != 0.75 {
+            self.load_factor = Some(load_factor);
+        }
+        self
+    }
+
+    /// Java's `(int) (capacity * loadFactor)`.
+    fn threshold_for(&self, table_len: usize) -> usize {
+        match self.load_factor {
+            #[allow(
+                clippy::cast_precision_loss,
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss
+            )]
+            Some(factor) => (table_len as f32 * factor).min(i32::MAX as f32) as usize,
+            None => table_len * 3 / 4,
+        }
+    }
+
+    /// Move the mapping at `at` to the END of the linked order — what an
+    /// access-ordered map's `afterNodeAccess` does. `false` when it is already
+    /// last, which a JDK does not count as a modification.
+    pub fn move_to_end(&mut self, at: usize) -> bool {
+        if at + 1 >= self.entries.len() {
+            return false;
+        }
+        let entry = self.entries.remove(at);
+        let last = self.entries.len();
+        for positions in self.index.values_mut() {
+            for position in positions.iter_mut() {
+                if *position == at {
+                    *position = last;
+                } else if *position > at {
+                    *position -= 1;
+                }
+            }
+        }
+        self.entries.push(entry);
+        self.order.take();
+        true
+    }
+
     /// `new HashMap<>(initialCapacity)`. Java rounds the hint up to a power
     /// of two and parks it in `threshold` until the first insertion.
     #[must_use]
@@ -342,7 +406,7 @@ impl JavaHashMap {
             } else {
                 self.threshold
             };
-            self.threshold = self.table_len * 3 / 4;
+            self.threshold = self.threshold_for(self.table_len);
         }
         self.index.entry(hash).or_default().push(self.entries.len());
         self.entries.push(Entry {
@@ -371,7 +435,7 @@ impl JavaHashMap {
     /// Double the table, as `resize` does.
     fn grow(&mut self) {
         self.table_len *= 2;
-        self.threshold = self.table_len * 3 / 4;
+        self.threshold = self.threshold_for(self.table_len);
     }
 
     /// How many entries share the bucket that `hash` lands in. Only consulted

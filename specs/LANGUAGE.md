@@ -12623,12 +12623,40 @@ rendering (`[deck]`, `{k=deck}`) prints the override of `toString` — while
 `super.toString()` inside that override renders the collection itself.
 `clone()` answers an instance of the program class with its fields copied.
 
-Not modelled: access-ordered `LinkedHashMap` (`super(16, 0.75f, true)`) and
-the `removeEldestEntry` hook, so the LRU-cache idiom is still refused; the
-two-argument `HashMap(capacity, loadFactor)` constructor; an override of
-`iterator()` does not change how the library walks the collection; a program
-`equals`/`hashCode` on an extended object is not what a hashed collection
-asks.
+Not modelled: an override of `iterator()` does not change how the library
+walks the collection; a program `equals`/`hashCode` on an extended object is
+not what a hashed collection asks.
+
+**The LRU cache.** The reason most programs extend `LinkedHashMap`:
+
+```java
+class Cache<K, V> extends LinkedHashMap<K, V> {
+    Cache(int cap) { super(16, 0.75f, true); this.cap = cap; }
+    protected boolean removeEldestEntry(Map.Entry<K, V> eldest) { return size() > cap; }
+}
+```
+
+The sizing constructors are modelled — `HashMap`/`HashSet`/`LinkedHashSet`
+`(capacity, loadFactor)` and `LinkedHashMap(capacity, loadFactor,
+accessOrder)` — with the JDK's refusals (`Illegal initial capacity: -1`,
+`Illegal load factor: 0.0`) and a load factor that really decides when the
+table doubles, which is observable in a `HashMap`'s order. An ACCESS-ordered
+map moves a mapping to its end on every access a JDK's `afterNodeAccess`
+sees: `get`, `getOrDefault`, and a write to an existing key (`put`,
+`putIfAbsent`, `putAll`, `replace` — the three-argument one only when it
+replaced — `merge`, `compute`, `computeIfAbsent`, `computeIfPresent`); not
+`containsKey`/`containsValue`, an entry's `setValue` or `replaceAll`. A move is
+a structural change (`bump_mod_count`), so a `get` inside a walk of the same
+map throws `ConcurrentModificationException` — except of the entry already
+last, which a JDK does not move and does not count. After every INSERTION
+(each entry of a `putAll` too, but not a copy constructor's, which a JDK
+builds with `evict = false`) a program class that overrides
+`removeEldestEntry` is asked about the eldest mapping, with the size after the
+insertion, and a `true` removes it. The hooks are read at the map's API
+(`map_intrinsic`), as whether the key was there before the call and whether
+the map grew, so the many internal paths through `map_put` are untouched.
+
+Pinned by `lru_cache` and `access_ordered_maps`.
 
 Pinned by `a_class_that_extends_a_collection`,
 `a_collection_subclass_overrides_and_calls_super`,
