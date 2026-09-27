@@ -63924,3 +63924,223 @@ public class DoClickTrace {
 }
 "#
 );
+
+// The list and combo family are GENERIC, as a JDK's are: `JComboBox<E>`,
+// `JList<E>`, `ListModel<E>`, `AbstractListModel<E>`, `DefaultListModel<E>`,
+// `ComboBoxModel<E>`, `DefaultComboBoxModel<E>`, `ListCellRenderer<E>`. They
+// were raw here, so `JComboBox<String>` was "wrong number of type arguments",
+// and the items were STRINGS — `getItemAt` answered an item's text, so a
+// `JComboBox` of numbers or of the program's own class read back wrongly.
+// Every call here runs on a headless JDK (none shows a window).
+differential_test!(
+    the_list_and_combo_are_generic,
+    "GenericLists",
+    r#"
+import javax.swing.*;
+import java.awt.*;
+import java.util.*;
+import java.util.List;
+
+public class GenericLists {
+    static class Pet {
+        final String name;
+        final int age;
+        Pet(String name, int age) { this.name = name; this.age = age; }
+        public String toString() { return name + "(" + age + ")"; }
+    }
+
+    static class Squares extends AbstractListModel<Integer> {
+        public int getSize() { return 4; }
+        public Integer getElementAt(int index) { return index * index; }
+    }
+
+    public static void main(String[] args) {
+        JComboBox<String> colors = new JComboBox<>(new String[] {"red", "green", "blue"});
+        colors.addItem("violet");
+        String first = colors.getItemAt(0);
+        System.out.println(first.toUpperCase() + " " + colors.getItemCount() + " " + colors.getSelectedItem());
+        colors.setSelectedIndex(2);
+        String chosen = (String) colors.getSelectedItem();
+        System.out.println(chosen.length() + " " + colors.getSelectedIndex());
+
+        JComboBox<Integer> sizes = new JComboBox<>();
+        for (int i = 1; i <= 3; i++) sizes.addItem(i * 10);
+        int total = 0;
+        for (int i = 0; i < sizes.getItemCount(); i++) total += sizes.getItemAt(i);
+        System.out.println(total + " " + sizes.getSelectedItem() + " " + sizes.getItemAt(1).getClass().getSimpleName());
+
+        JComboBox<Pet> pets = new JComboBox<>(new Pet[] {new Pet("Rex", 3), new Pet("Tom", 5)});
+        Pet p = pets.getItemAt(1);
+        System.out.println(p.name + " " + p.age + " " + pets.getSelectedItem());
+
+        DefaultComboBoxModel<String> cmodel = new DefaultComboBoxModel<>();
+        cmodel.addElement("a");
+        cmodel.addElement("b");
+        JComboBox<String> fromModel = new JComboBox<>(cmodel);
+        System.out.println(fromModel.getItemAt(1) + " " + cmodel.getSize() + " " + cmodel.getElementAt(0).length()
+            + " " + cmodel.getIndexOf("b") + " " + fromModel.getModel().getSize());
+
+        DefaultListModel<String> model = new DefaultListModel<>();
+        model.addElement("apple");
+        model.addElement("fig");
+        model.add(1, "kiwi");
+        String got = model.get(1);
+        System.out.println(got.charAt(0) + " " + model.getElementAt(2).length() + " " + model.size() + " "
+            + model.contains("fig") + " " + model.indexOf("fig") + " " + model.firstElement() + " " + model);
+        JList<String> list = new JList<>(model);
+        list.setSelectedIndex(1);
+        String sel = list.getSelectedValue();
+        System.out.println(sel.toUpperCase() + " " + list.getModel().getElementAt(0));
+        List<String> many = list.getSelectedValuesList();
+        System.out.println(many + " " + many.size());
+
+        DefaultListModel<Pet> petModel = new DefaultListModel<>();
+        petModel.addElement(new Pet("Ada", 2));
+        JList<Pet> petList = new JList<>(petModel);
+        petList.setSelectedIndex(0);
+        System.out.println(petList.getSelectedValue().age + 1);
+
+        JList<String> fromArray = new JList<>(new String[] {"x", "y"});
+        fromArray.setSelectedIndex(1);
+        System.out.println(fromArray.getSelectedValue() + fromArray.getModel().getSize());
+
+        JList<Integer> squares = new JList<>(new Squares());
+        squares.setSelectedIndex(3);
+        int sq = squares.getSelectedValue();
+        System.out.println(sq + " " + squares.getModel().getElementAt(2));
+
+        ListModel<String> asModel = model;
+        System.out.println(asModel.getElementAt(0).length());
+        ListCellRenderer<? super String> renderer = list.getCellRenderer();
+        System.out.println(renderer != null);
+        list.setCellRenderer(new DefaultListCellRenderer() {
+            public Component getListCellRendererComponent(JList<?> l, Object value, int index,
+                    boolean isSelected, boolean cellHasFocus) {
+                return super.getListCellRendererComponent(l, value, index, isSelected, cellHasFocus);
+            }
+        });
+        Vector<String> v = new Vector<>(Arrays.asList("p", "q"));
+        JList<String> fromVector = new JList<>(v);
+        JComboBox<String> comboVector = new JComboBox<>(v);
+        System.out.println(fromVector.getModel().getElementAt(1) + comboVector.getItemAt(0));
+        model.removeElement("fig");
+        model.set(0, "banana");
+        System.out.println(model + " " + model.remove(0) + " " + model);
+    }
+}
+"#
+);
+
+// A wildcard whose bound is the CLASS's own type variable — `? extends E`,
+// `? super E` — is checked against what the receiver says `E` is. The bound
+// was resolved as a class named `E`, found nothing, and became an exact
+// `Object`, so every such call was refused. And `? super T` for a method's own
+// variable erased to `? super Object`, refusing the textbook
+// `copy(List<? extends T> src, List<? super T> dst)`.
+differential_test!(
+    a_wildcard_over_a_type_variable,
+    "WildcardVariables",
+    r#"
+import java.util.*;
+
+public class WildcardVariables {
+    static class Pet { public String toString() { return "pet"; } }
+    static class Dog extends Pet { public String toString() { return "dog"; } }
+
+    static class Box<E> {
+        List<E> items = new ArrayList<>();
+        void in(List<? extends E> more) { for (E e : more) items.add(e); }
+        void out(List<? super E> sink) { sink.addAll(items); }
+        Box(Collection<? extends E> start) { items.addAll(start); }
+    }
+
+    static <T> void copy(List<? extends T> src, List<? super T> dst) {
+        for (T t : src) dst.add(t);
+    }
+
+    <T> void fill(List<? super T> dst, T value) { dst.add(value); }
+
+    public static void main(String[] args) {
+        Box<Pet> pets = new Box<>(new Vector<Dog>(Arrays.asList(new Dog())));
+        pets.in(new ArrayList<Dog>(Arrays.asList(new Dog())));
+        List<Object> things = new ArrayList<>();
+        pets.out(things);
+        Box<Number> numbers = new Box<>(Arrays.asList(1, 2.5));
+        numbers.in(new ArrayList<Integer>(Arrays.asList(3)));
+        List<Object> sink = new ArrayList<>();
+        numbers.out(sink);
+        Box<Integer> ints = new Box<>(new ArrayList<Integer>(Arrays.asList(7)));
+        List<Number> nums = new ArrayList<>();
+        ints.out(nums);
+        Box<String> words = new Box<>(new HashSet<String>(Arrays.asList("w")));
+        List<CharSequence> chars = new ArrayList<>();
+        words.out(chars);
+        System.out.println(pets.items + " " + things + " " + sink + " " + nums + " " + chars);
+        List<String> a = new ArrayList<>(Arrays.asList("x", "y"));
+        List<Object> c = new ArrayList<>();
+        copy(a, c);
+        List<Number> n = new ArrayList<>();
+        copy(Arrays.asList(1, 2), n);
+        new WildcardVariables().fill(n, 3.5);
+        System.out.println(c + " " + n);
+    }
+}
+"#
+);
+
+// ...and the wrong direction still refuses, in javac's words.
+differential_wording!(
+    a_super_wildcard_takes_only_supertypes,
+    "SuperOfVariable",
+    r#"
+import java.util.*;
+
+public class SuperOfVariable {
+    static class Pet {}
+    static class Dog extends Pet {}
+    static class Box<E> { void out(List<? super E> sink) {} }
+
+    public static void main(String[] args) {
+        new Box<Pet>().out(new ArrayList<Dog>());
+    }
+}
+"#
+);
+
+differential_wording!(
+    an_extends_wildcard_takes_only_subtypes,
+    "ExtendsOfVariable",
+    r#"
+import java.util.*;
+
+public class ExtendsOfVariable {
+    static class Pet {}
+    static class Dog extends Pet {}
+    static class Box<E> { void in(List<? extends E> more) {} }
+
+    public static void main(String[] args) {
+        new Box<Dog>().in(new ArrayList<Pet>());
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_copy_between_unrelated_elements,
+    "CopyUnrelated",
+    r#"
+import java.util.*;
+
+public class CopyUnrelated {
+    static <T> void copy(List<? extends T> src, List<? super T> dst) {
+        for (T t : src) dst.add(t);
+    }
+
+    public static void main(String[] args) {
+        List<Integer> ints = new ArrayList<>();
+        List<String> strings = new ArrayList<>();
+        copy(ints, strings);
+    }
+}
+"#
+);

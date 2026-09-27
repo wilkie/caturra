@@ -512,6 +512,13 @@ struct MethodSig {
     /// for a method whose return is not an inferable type variable, and for
     /// every synthesized or library signature.
     ret_infer: Option<crate::ast::ReturnPlan>,
+    /// The method's OWN type variables written inside a wildcard parameter:
+    /// `(variable, parameter, is_super)` for `List<? extends T>` (false) and
+    /// `List<? super T>` (true). The erased parameter takes any element — the
+    /// erasure cannot know `T` — so the call checks that some `T` fits: every
+    /// element an `extends` argument supplies (and every argument that IS a
+    /// `T`) has to widen to every element a `super` argument accepts.
+    var_wildcards: Vec<(String, usize, bool)>,
 }
 
 impl MethodSig {
@@ -713,8 +720,49 @@ fn substitute_member_type(
     // VALUE type and must box.
     substitute_member_elems(ty, |elem| match elem {
         ElemType::TypeVar(index) => table.type_arg(first, rest, index).unwrap_or(elem),
+        ElemType::Wildcard {
+            bound: WildcardBound::VarUpper(index),
+            ..
+        } => table
+            .type_arg(first, rest, index)
+            .map_or(elem, |arg| wildcard_over(arg, true, table)),
+        ElemType::Wildcard {
+            bound: WildcardBound::VarLower(index),
+            ..
+        } => table
+            .type_arg(first, rest, index)
+            .map_or(elem, |arg| wildcard_over(arg, false, table)),
         other => other,
     })
+}
+
+/// `? extends A` (`upper`) or `? super A` for a receiver's type argument `A`:
+/// a class takes its subtypes (or supertypes); anything else — a final
+/// `String` or wrapper, a nested container — takes itself.
+fn wildcard_over(arg: ElemType, upper: bool, table: &MethodTable) -> ElemType {
+    match (arg, upper) {
+        (ElemType::Object(id), true) => ElemType::Wildcard {
+            read: id,
+            bound: WildcardBound::Upper(id),
+        },
+        (ElemType::Object(id), false) => ElemType::Wildcard {
+            read: table.object_id,
+            bound: WildcardBound::Lower(id),
+        },
+        (ElemType::Str, false) => ElemType::Wildcard {
+            read: table.object_id,
+            bound: WildcardBound::LowerString,
+        },
+        (ElemType::Wrapper(prim), false) => ElemType::Wildcard {
+            read: table.object_id,
+            bound: WildcardBound::LowerWrapper(prim),
+        },
+        (other, false) if Prim::of(other).is_some() => ElemType::Wildcard {
+            read: table.object_id,
+            bound: WildcardBound::LowerWrapper(Prim::of(other).unwrap_or(Prim::Int)),
+        },
+        (other, _) => other,
+    }
 }
 
 /// The parameters of `method` as the program wrote them, with the CLASS's type
@@ -724,6 +772,26 @@ fn substitute_member_type(
 /// parameters, a declaration the parser kept no written form for, or a
 /// parameter mentioning one of the METHOD's own variables — that one erases to
 /// its BOUND, which the erased parameter beside this already is.
+/// See [`MethodSig::var_wildcards`].
+fn method_var_wildcards(method: &MethodDecl) -> Vec<(String, usize, bool)> {
+    let mut out = Vec::new();
+    for (index, written) in method.declared_params.iter().enumerate() {
+        let TypeRef::Generic { args, .. } = written else {
+            continue;
+        };
+        for arg in args {
+            if let TypeRef::Named(name) = arg
+                && let Some((variance, bound)) = crate::ast::wildcard_parts(name)
+                && matches!(variance, '+' | '-')
+                && method.type_params.iter().any(|tp| tp.name == bound)
+            {
+                out.push((bound.to_owned(), index, variance == '-'));
+            }
+        }
+    }
+    out
+}
+
 fn declared_parameters(class: &ClassDecl, method: &MethodDecl, table: &MethodTable) -> Vec<JType> {
     // A bundled primitive functional interface writes its SAM parameter as
     // `Object` — one erased shape for every synthesized lambda — while the
@@ -831,6 +899,22 @@ fn rename_class_vars(
     own: &[&str],
 ) -> Option<TypeRef> {
     Some(match ty {
+        // `? extends E` / `? super E`: the bound is the variable, by position.
+        TypeRef::Named(name) if crate::ast::wildcard_parts(name).is_some() => {
+            let (variance, bound) = crate::ast::wildcard_parts(name)?;
+            if own.iter().any(|it| *it == bound) {
+                return None;
+            }
+            match class_params.iter().position(|tp| tp.name == bound) {
+                Some(index) if matches!(variance, '+' | '-') => {
+                    TypeRef::Named(crate::ast::wildcard_type_name(
+                        variance,
+                        &crate::parser::typevar_sentinel(u8::try_from(index).ok()?),
+                    ))
+                }
+                _ => ty.clone(),
+            }
+        }
         TypeRef::Named(name) => {
             if own.iter().any(|it| it == name) {
                 return None;
@@ -864,7 +948,8 @@ fn mentions_type_var(ty: JType, object: ClassId) -> bool {
         || substitute_member_elems(ty, |elem| match elem {
             ElemType::TypeVar(_)
             | ElemType::Wildcard {
-                bound: WildcardBound::TypeVar(_),
+                bound:
+                    WildcardBound::TypeVar(_) | WildcardBound::VarUpper(_) | WildcardBound::VarLower(_),
                 ..
             } => ElemType::Object(object),
             other => other,
@@ -1035,6 +1120,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                     // NOT flagged `is_final` here: the dedicated check for
                     // Object's four final methods reports all of them alike
@@ -1053,6 +1139,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                     // `protected Object clone() throws CloneNotSupportedException`
                     // — reachable as `this.clone()` inside the class itself,
@@ -1070,6 +1157,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                     MethodSig {
                         name: String::from("hashCode"),
@@ -1084,6 +1172,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                     MethodSig {
                         name: String::from("equals"),
@@ -1098,6 +1187,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                 ],
                 fields: Vec::new(),
@@ -1140,6 +1230,7 @@ impl MethodTable {
                     var_sources: Vec::new(),
                     written: Vec::new(),
                     ret_infer: None,
+                    var_wildcards: Vec::new(),
                 }],
                 fields: Vec::new(),
             },
@@ -1205,6 +1296,7 @@ impl MethodTable {
                             var_sources: Vec::new(),
                             written: Vec::new(),
                             ret_infer: None,
+                            var_wildcards: Vec::new(),
                         }]
                     },
                     fields: Vec::new(),
@@ -1240,6 +1332,7 @@ impl MethodTable {
                     var_sources: Vec::new(),
                     written: Vec::new(),
                     ret_infer: None,
+                    var_wildcards: Vec::new(),
                 }],
             ),
             (
@@ -1258,6 +1351,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                     MethodSig {
                         name: String::from("next"),
@@ -1272,6 +1366,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                     // `remove()` is a DEFAULT since Java 8 — an implementor
                     // need not write one, and one that does is OVERRIDING it.
@@ -1291,6 +1386,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     },
                 ],
             ),
@@ -1358,6 +1454,7 @@ impl MethodTable {
                 var_sources: Vec::new(),
                 written: Vec::new(),
                 ret_infer: None,
+                var_wildcards: Vec::new(),
             };
             table.classes.insert(
                 String::from("Number"),
@@ -1431,6 +1528,7 @@ impl MethodTable {
                 var_sources: Vec::new(),
                 written: Vec::new(),
                 ret_infer: None,
+                var_wildcards: Vec::new(),
             };
             table.classes.insert(
                 String::from("Enum"),
@@ -1707,6 +1805,7 @@ impl MethodTable {
                         } else {
                             method.infer_return.clone()
                         },
+                        var_wildcards: method_var_wildcards(method),
                     };
                     if methods
                         .iter()
@@ -1748,6 +1847,7 @@ impl MethodTable {
                         var_sources: Vec::new(),
                         written: Vec::new(),
                         ret_infer: None,
+                        var_wildcards: Vec::new(),
                     });
                 }
 
@@ -5778,6 +5878,18 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
             bound: WildcardBound::TypeVar(erasure),
         };
     }
+    if matches!(variance, '+' | '-')
+        && let Some(index) = crate::parser::typevar_index(bound)
+    {
+        return ElemType::Wildcard {
+            read: object,
+            bound: if variance == '+' {
+                WildcardBound::VarUpper(index)
+            } else {
+                WildcardBound::VarLower(index)
+            },
+        };
+    }
     // `? super T` for a type VARIABLE, whose erasure is `Object`: it stays a
     // LOWER wildcard, which is the writable one. Falling into the unbounded
     // arm below made `Collection<? super T> sink` refuse `sink.addAll(items)`
@@ -5830,6 +5942,10 @@ fn wildcard_elem(variance: char, bound: &str, table: &MethodTable) -> ElemType {
                 Some(prim) => ElemType::Wildcard {
                     read: object,
                     bound: WildcardBound::LowerWrapper(prim),
+                },
+                None if matches!(canonical, "String" | "java.lang.String") => ElemType::Wildcard {
+                    read: object,
+                    bound: WildcardBound::LowerString,
                 },
                 None => ElemType::Object(object),
             },
@@ -6036,7 +6152,10 @@ fn elem_matches(arg: ElemType, param: ElemType, table: &MethodTable) -> bool {
 /// so `List<argElem>` may be passed for a `List<? …>` parameter.
 fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) -> bool {
     match bound {
-        WildcardBound::Unbounded | WildcardBound::Raw => true,
+        WildcardBound::Unbounded
+        | WildcardBound::Raw
+        | WildcardBound::VarUpper(_)
+        | WildcardBound::VarLower(_) => true,
         // The variable's own bound, which is `Object` for an unbounded one —
         // and `elem_widens_to_class` answers `true` for every element there,
         // so the unbounded case keeps taking anything.
@@ -6071,6 +6190,7 @@ fn wildcard_accepts(arg: ElemType, bound: WildcardBound, table: &MethodTable) ->
         // `? super Integer`: the wrapper itself, or one of the faces it widens
         // to — `Number`, `Object`, `Comparable`. Asked in that direction,
         // which is what a LOWER bound means: does the BOUND fit the argument.
+        WildcardBound::LowerString => widens(JType::Str, elem_value_type(arg, table), table),
         WildcardBound::LowerWrapper(bound) => match arg {
             ElemType::Object(id) => wrapper_face(Some(bound.elem()), id, table),
             ElemType::Wrapper(prim) => prim == bound,
@@ -9393,6 +9513,10 @@ enum WildcardBound {
     /// Carries the PRIMITIVE, not the element type — an `ElemType` holds a
     /// wildcard, so nesting one here makes the two types recursive.
     LowerWrapper(Prim),
+    /// `? super String` — `String` is an element, not a class in the table,
+    /// so `Lower` has no id for it either: accepts any element `String`
+    /// widens to (`String`, `Object`, `CharSequence`, `Comparable`).
+    LowerString,
     /// A RAW type's missing argument (`List l = new ArrayList();`). JLS §4.8:
     /// legal Java, and its members read and write the ERASURE — so unlike `?`
     /// a raw collection may be written to, and unlike `<Object>` it converts
@@ -9410,6 +9534,16 @@ enum WildcardBound {
     /// Unlike `? extends` it is a real type, not a capture, so the collection
     /// may still be written to.
     TypeVar(ClassId),
+    /// `? extends E` / `? super E` for the DECLARING class's own variable at
+    /// this position, as a call checks a parameter once the receiver says what
+    /// `E` is (`Box<String>.addAll(List<? extends E>)` takes a `List<String>`,
+    /// or a list of any subtype). Substituting the receiver's argument makes it
+    /// an ordinary `Upper`/`Lower` wildcard; with nothing to substitute it is
+    /// the erasure, and takes any element. Before this the bound — the name
+    /// `E`, which is no class — resolved as an exact `Object`, and every such
+    /// call was "List<String> cannot be converted to List<Object>".
+    VarUpper(u8),
+    VarLower(u8),
 }
 
 impl ElemType {
@@ -9519,9 +9653,12 @@ impl ElemType {
             WildcardBound::LowerWrapper(prim) => {
                 format!("? super {}", wrapper_name(prim.elem(), table))
             }
+            WildcardBound::LowerString => String::from("? super String"),
             // A raw or type-variable element has no written form of its own;
             // `parameterized` drops a raw one before it gets here.
             WildcardBound::Raw | WildcardBound::TypeVar(_) => JType::Object(read).describe(table),
+            // Unsubstituted: the variable's NAME is not carried.
+            WildcardBound::VarUpper(_) | WildcardBound::VarLower(_) => String::from("?"),
         }
     }
 
@@ -37822,6 +37959,31 @@ impl BodyGen<'_> {
             );
             return None;
         }
+        // An instance method's own type VARIABLES have to agree as a static
+        // method's do (the static call site asked; this one did not).
+        if let Some(variable) = self.generic_variables_agree(&sig, args, &arg_types) {
+            let declarer = self
+                .table
+                .declaring_class(&class_name, method)
+                .unwrap_or_else(|| class_name.clone());
+            let described = source_type_name(&format!("class {declarer}"));
+            let required = if sig.written.is_empty() {
+                &sig.params
+            } else {
+                &sig.written
+            };
+            self.error(
+                span,
+                format!(
+                    "method {method} in {described} cannot be applied to given types;\n  \
+                     required: {}\n  found: {}\n  reason: inference variable {variable} has \
+                     incompatible bounds",
+                    argument_list(required, self.table),
+                    argument_list(&arg_types, self.table)
+                ),
+            );
+            return None;
+        }
         // A SUBCLASS that fixed a generic supertype's argument — `Names
         // extends Bag<String>` — records nothing on the receiver's own type,
         // because the receiver IS a `Names`. The argument is written on its
@@ -41744,6 +41906,65 @@ impl BodyGen<'_> {
                 .first
                 .map(|elem| elem_value_type(elem, self.table))
         };
+        // Some `T` has to fit between what the `? extends T` arguments (and
+        // the arguments that ARE a `T`) supply and what the `? super T`
+        // arguments accept. A poly container pins nothing (it becomes what
+        // the call needs), and neither does an element nothing pinned.
+        for (name, _, _) in &sig.var_wildcards {
+            let fixed = |index: usize| {
+                if args.get(index).is_some_and(mints_a_collection) {
+                    return None;
+                }
+                element(index).filter(|elem| *elem != JType::Null)
+            };
+            let mut below: Vec<JType> = Vec::new();
+            let mut above: Vec<JType> = Vec::new();
+            for (var, index, is_super) in &sig.var_wildcards {
+                if var != name {
+                    continue;
+                }
+                if let Some(elem) = fixed(*index) {
+                    if *is_super {
+                        above.push(elem);
+                    } else {
+                        below.push(elem);
+                    }
+                }
+            }
+            let sources = sig
+                .var_sources
+                .iter()
+                .find(|(var, _)| var == name)
+                .map_or(&[][..], |(_, sources)| sources.as_slice());
+            for source in sources {
+                match source {
+                    InferSource::Direct(index) => {
+                        if let Some(&given) = arg_types.get(*index)
+                            && given != JType::Null
+                        {
+                            below.push(match boxable_primitive(given) {
+                                Some(elem) => JType::Boxed(elem),
+                                None => given,
+                            });
+                        }
+                    }
+                    InferSource::Element(index) => {
+                        if let Some(elem) = fixed(*index) {
+                            below.push(elem);
+                            above.push(elem);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if below.iter().any(|low| {
+                above
+                    .iter()
+                    .any(|high| low != high && !widens(*low, *high, self.table))
+            }) {
+                return Some(name);
+            }
+        }
         for (name, sources) in &sig.var_sources {
             // What the containers the program WROTE OUT pin it to, exactly:
             // a container is invariant, so two of them must agree.

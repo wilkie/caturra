@@ -15859,6 +15859,52 @@ Pinned as `a_pool_runs_its_tasks`, `the_concurrent_toolkit`,
 `qualified_bundled_names`, `a_qualified_thread` and
 `refused_a_pool_never_shut_down`.
 
+### Swing's generic lists, and a wildcard over a type variable (2026-09-26)
+
+`JComboBox<String>` was "wrong number of type arguments; required 0": the
+bundled list and combo family was raw — and worse, `String`-typed underneath,
+so `getItemAt` answered an item's TEXT and `DefaultListModel` held only
+strings. A `JComboBox` of numbers, or of the program's own class, read back
+wrongly even written raw. They are generic now, with a JDK's signatures:
+`JComboBox<E>`, `JList<E>`, `ListModel<E>`, `AbstractListModel<E>`,
+`DefaultListModel<E>` (over a `Vector`, as a JDK's is, so a bad index throws
+what a `Vector` throws), `ComboBoxModel<E>`, `MutableComboBoxModel<E>`,
+`DefaultComboBoxModel<E>` and `ListCellRenderer<E>`. `getSelectedValuesList`,
+`JList(Vector)`/`JComboBox(Vector)` and a never-null `getCellRenderer` came
+with them, and a combo's selection is found by `equals`. Raw use keeps
+working; all 51 playground demos compile under both caturra and javac.
+
+Two general gaps sat behind it, both about a wildcard whose bound is a TYPE
+VARIABLE:
+
+- **The class's own variable** — `void addAll(List<? extends E> more)` in a
+  `Box<E>`. The parameter as written is what a call is checked against, with
+  `E` renamed to its position so the receiver can say what it is; the rename
+  never looked inside a wildcard, so the bound resolved as a class named `E`,
+  found nothing, and became an exact `Object` — every such call was refused.
+  Now `WildcardBound::VarUpper`/`VarLower` carry the position, and the
+  receiver's argument makes them an ordinary `? extends`/`? super` bound
+  (over a class, a wrapper — `LowerWrapper` — or `String`, which has its own
+  `LowerString` now; a written `? super String` parameter took only a
+  `List<Object>` before).
+- **A method's own variable** under `? super` — the textbook
+  `copy(List<? extends T> src, List<? super T> dst)` — erased to
+  `? super Object` and took only a `List<Object>`. The erased view now accepts
+  any element there, and the call checks that some `T` fits: everything an
+  `extends` argument (or a `T` argument) supplies must widen to everything a
+  `super` argument accepts (`MethodSig::var_wildcards`). That check now runs
+  for an instance method's own variables too; only a static call asked before.
+
+One wording difference is left: a wildcard over a FINAL bound (`? extends
+String`, `? extends Integer`) reads as the type itself in a message, since a
+wildcard's read type is a class here and `String` is not one in the table.
+Accepting and refusing agree.
+
+Pinned as `the_list_and_combo_are_generic`, `a_wildcard_over_a_type_variable`,
+`a_super_wildcard_takes_only_supertypes`,
+`an_extends_wildcard_takes_only_subtypes` and
+`a_copy_between_unrelated_elements`.
+
 ### Swing under threads (2026-09-26)
 
 Phase 3 of specs/CONCURRENCY.md. Swing gets a real event-dispatch thread,

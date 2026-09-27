@@ -2103,7 +2103,9 @@ fn swing_combo_box_is_backed_by_a_default_combo_box_model() {
     assert!(matches!(result, Ok(ExitStatus::Completed)), "{result:?}");
     assert_eq!(
         console.stdout_text(),
-        "selected=Apple idx=0\nadded [2]\ncount=3 at2=Cherry\nremoved [0]\nafter remove: Banana idx=0\nselection -> Cherry\nmodel says Cherry\n"
+        // Removing the selected element moves the selection FIRST (a
+        // contents change), then reports the removal — a JDK's order.
+        "selected=Apple idx=0\nadded [2]\ncount=3 at2=Cherry\nselection -> Banana\nremoved [0]\nafter remove: Banana idx=0\nselection -> Cherry\nmodel says Cherry\n"
     );
 }
 

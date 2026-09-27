@@ -6214,12 +6214,17 @@ fn erase_in_type_arg(
         } else {
             erased
         };
-        // `? extends T` READS as T's bound; `? super T` still reads as Object,
-        // so it keeps its own variance.
+        // `? extends T` READS as T's bound. `? super T` reads as Object and
+        // accepts, in this erased view, any element: which elements a SUPER
+        // bound of an unknown `T` admits is the call's question, answered by
+        // the position-tracked parameter (a class's variable) or the
+        // variance check (a method's own, `MethodSig::var_wildcards`). Erased
+        // to `? super Object` it took only a `List<Object>`, and the textbook
+        // `copy(List<? extends T> src, List<? super T> dst)` was refused.
         let replacement = if variance == '+' {
             crate::ast::wildcard_type_name('=', &erased)
         } else {
-            crate::ast::wildcard_type_name('-', &erased)
+            crate::ast::wildcard_type_name('=', "")
         };
         *ty = TypeRef::Named(replacement);
         return;

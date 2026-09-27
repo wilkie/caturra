@@ -1291,40 +1291,46 @@ class ButtonGroup {
   }
 }
 
-class JComboBox extends Component {
+class JComboBox<E> extends Component {
   // Always model-backed, like real Swing: the items and the selection live in
-  // the ComboBoxModel, so any custom model works.
-  ComboBoxModel __model = new DefaultComboBoxModel();
+  // the ComboBoxModel, so any custom model works. Generic as a JDK's is: the
+  // items are the program's own objects, not their text.
+  ComboBoxModel<E> __model = new DefaultComboBoxModel<E>();
   boolean __editable = false;
   ActionListener __actionListener = null;
+  ListCellRenderer __renderer = null;
   public JComboBox() {}
-  public JComboBox(String[] items) { __model = new DefaultComboBoxModel(items); }
-  public JComboBox(ComboBoxModel model) { __model = model; }
-  public void setModel(ComboBoxModel model) { __model = model; }
-  public ComboBoxModel getModel() { return __model; }
+  public JComboBox(E[] items) { __model = new DefaultComboBoxModel<E>(items); }
+  public JComboBox(java.util.Vector<E> items) { __model = new DefaultComboBoxModel<E>(items); }
+  public JComboBox(ComboBoxModel<E> model) { __model = model; }
+  public void setModel(ComboBoxModel<E> model) { __model = model; }
+  public ComboBoxModel<E> getModel() { return __model; }
   // Mutating the items needs a mutable model (real Swing throws otherwise).
-  MutableComboBoxModel __mutable() { return (MutableComboBoxModel) __model; }
-  public void addItem(String item) { __mutable().addElement(item); }
-  public void insertItemAt(String item, int index) { __mutable().insertElementAt(item, index); }
-  public void removeItem(String item) { __mutable().removeElement(item); }
+  MutableComboBoxModel<E> __mutable() { return (MutableComboBoxModel<E>) __model; }
+  public void addItem(E item) { __mutable().addElement(item); }
+  public void insertItemAt(E item, int index) { __mutable().insertElementAt(item, index); }
+  public void removeItem(Object item) { __mutable().removeElement(item); }
   public void removeItemAt(int index) { __mutable().removeElementAt(index); }
   public void removeAllItems() {
-    MutableComboBoxModel model = __mutable();
+    MutableComboBoxModel<E> model = __mutable();
     for (int i = __model.getSize() - 1; i >= 0; i--) model.removeElementAt(i);
     __model.setSelectedItem(null);
   }
   public int getItemCount() { return __model.getSize(); }
-  public String getItemAt(int index) { return __str(__model.getElementAt(index)); }
-  static String __str(Object v) { return v == null ? null : "" + v; }
-  // The index of the selected item, or -1 when nothing matches (an editable
-  // combo may hold a custom value that isn't in the list).
+  public E getItemAt(int index) { return __model.getElementAt(index); }
+  public void setRenderer(ListCellRenderer<? super E> renderer) { __renderer = renderer; }
+  public ListCellRenderer<? super E> getRenderer() {
+    if (__renderer == null) __renderer = new DefaultListCellRenderer();
+    return __renderer;
+  }
+  // The index of the selected item by equals, as a JDK's compares, or -1 when
+  // nothing matches (an editable combo may hold a custom value).
   public int getSelectedIndex() {
     Object selected = __model.getSelectedItem();
     if (selected == null) return -1;
-    String s = "" + selected;
     for (int i = 0; i < __model.getSize(); i++) {
       Object element = __model.getElementAt(i);
-      if (element != null && ("" + element).equals(s)) return i;
+      if (element != null && element.equals(selected)) return i;
     }
     return -1;
   }
@@ -1335,6 +1341,10 @@ class JComboBox extends Component {
   public Object getSelectedItem() { return __model.getSelectedItem(); }
   // For an editable combo, accepts a value not in the list (a custom entry).
   public void setSelectedItem(Object item) { __model.setSelectedItem(item); }
+  public Object[] getSelectedObjects() {
+    Object selected = __model.getSelectedItem();
+    return selected == null ? new Object[0] : new Object[] {selected};
+  }
   public void setEditable(boolean editable) { __editable = editable; }
   public boolean isEditable() { return __editable; }
   public void addActionListener(ActionListener l) { __actionListener = l; __SwingRuntime.__interactive = true; }
@@ -1386,19 +1396,24 @@ class ListSelectionModel {
 // addElement/remove/clear appear as soon as the event loop repaints.
 // The data model behind a JList. Students usually subclass AbstractListModel
 // (implementing the two abstract queries) or use DefaultListModel.
-interface ListModel {
+interface ListModel<E> {
   int getSize();
-  Object getElementAt(int index);
+  E getElementAt(int index);
   void addListDataListener(ListDataListener l);
   void removeListDataListener(ListDataListener l);
 }
 
 // A convenience base: manages listeners and the fireXxx notifications, so a
 // subclass only has to implement getSize and getElementAt.
-abstract class AbstractListModel implements ListModel {
+abstract class AbstractListModel<E> implements ListModel<E> {
   java.util.ArrayList<ListDataListener> __dataListeners = new java.util.ArrayList<ListDataListener>();
   public void addListDataListener(ListDataListener l) { __dataListeners.add(l); }
   public void removeListDataListener(ListDataListener l) { __dataListeners.remove(l); }
+  public ListDataListener[] getListDataListeners() {
+    ListDataListener[] all = new ListDataListener[__dataListeners.size()];
+    for (int i = 0; i < all.length; i++) all[i] = __dataListeners.get(i);
+    return all;
+  }
   protected void fireContentsChanged(Object source, int index0, int index1) {
     ListDataEvent e = new ListDataEvent(source, ListDataEvent.CONTENTS_CHANGED, index0, index1);
     for (ListDataListener l : __dataListeners) l.contentsChanged(e);
@@ -1414,137 +1429,161 @@ abstract class AbstractListModel implements ListModel {
   // getSize / getElementAt stay abstract (from ListModel).
 }
 
-class DefaultListModel extends AbstractListModel {
-  java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+// A mutable list model over a Vector, as a JDK's is — so what it throws for a
+// bad index is what a Vector throws. A JList built on one re-reads it on every
+// render, so addElement/remove/clear appear as soon as the window repaints.
+class DefaultListModel<E> extends AbstractListModel<E> {
+  java.util.Vector<E> __elements = new java.util.Vector<E>();
   public DefaultListModel() {}
-  public void addElement(String element) {
-    __elements.add(element);
-    fireIntervalAdded(this, __elements.size() - 1, __elements.size() - 1);
+  public void addElement(E element) {
+    int index = __elements.size();
+    __elements.addElement(element);
+    fireIntervalAdded(this, index, index);
   }
-  public void add(int index, String element) {
+  public void add(int index, E element) {
     __elements.add(index, element);
     fireIntervalAdded(this, index, index);
   }
-  public String get(int index) { return __elements.get(index); }
-  // Object (not String) so it overrides ListModel.getElementAt exactly; use
-  // get(int) when you want a String back.
-  public Object getElementAt(int index) { return __elements.get(index); }
-  public String elementAt(int index) { return __elements.get(index); }
-  public String set(int index, String element) {
-    String previous = __elements.set(index, element);
+  public void insertElementAt(E element, int index) {
+    __elements.insertElementAt(element, index);
+    fireIntervalAdded(this, index, index);
+  }
+  public E get(int index) { return __elements.elementAt(index); }
+  public E getElementAt(int index) { return __elements.elementAt(index); }
+  public E elementAt(int index) { return __elements.elementAt(index); }
+  public E set(int index, E element) {
+    E previous = __elements.set(index, element);
     fireContentsChanged(this, index, index);
     return previous;
   }
-  public String remove(int index) {
-    String removed = __elements.remove(index);
+  public void setElementAt(E element, int index) {
+    __elements.setElementAt(element, index);
+    fireContentsChanged(this, index, index);
+  }
+  public E remove(int index) {
+    E removed = __elements.remove(index);
     fireIntervalRemoved(this, index, index);
     return removed;
   }
-  // Element params are String (the model holds Strings), where real Swing uses
-  // Object — the bundled ArrayList types these overloads by element type.
-  public boolean removeElement(String element) {
-    int index = __elements.indexOf(element);
-    if (index < 0) return false;
-    __elements.remove(index);
+  public void removeElementAt(int index) {
+    __elements.removeElementAt(index);
     fireIntervalRemoved(this, index, index);
-    return true;
+  }
+  public boolean removeElement(Object element) {
+    int index = __elements.indexOf(element);
+    boolean removed = __elements.removeElement(element);
+    if (index >= 0) fireIntervalRemoved(this, index, index);
+    return removed;
   }
   public void removeAllElements() { __clearAndFire(); }
   public void clear() { __clearAndFire(); }
   void __clearAndFire() {
     int last = __elements.size() - 1;
-    __elements.clear();
+    __elements.removeAllElements();
     if (last >= 0) fireIntervalRemoved(this, 0, last);
   }
   public int getSize() { return __elements.size(); }
   public int size() { return __elements.size(); }
   public boolean isEmpty() { return __elements.isEmpty(); }
-  public boolean contains(String element) { return __elements.contains(element); }
-  public int indexOf(String element) { return __elements.indexOf(element); }
-  public String firstElement() { return __elements.get(0); }
-  public String lastElement() { return __elements.get(__elements.size() - 1); }
+  public boolean contains(Object element) { return __elements.contains(element); }
+  public int indexOf(Object element) { return __elements.indexOf(element); }
+  public int lastIndexOf(Object element) { return __elements.lastIndexOf(element); }
+  public E firstElement() { return __elements.firstElement(); }
+  public E lastElement() { return __elements.lastElement(); }
+  public Object[] toArray() { return __elements.toArray(); }
+  public String toString() { return __elements.toString(); }
 }
 
 // A ListModel that also tracks a selected item (which, for an editable combo,
 // need not be one of the elements).
-interface ComboBoxModel extends ListModel {
+interface ComboBoxModel<E> extends ListModel<E> {
   Object getSelectedItem();
   void setSelectedItem(Object item);
 }
 
 // A ComboBoxModel whose elements can be changed; JComboBox.addItem and friends
 // require one (real Swing throws when the model isn't mutable).
-interface MutableComboBoxModel extends ComboBoxModel {
-  void addElement(String item);
-  void removeElement(String item);
-  void insertElementAt(String item, int index);
+interface MutableComboBoxModel<E> extends ComboBoxModel<E> {
+  void addElement(E item);
+  void removeElement(Object item);
+  void insertElementAt(E item, int index);
   void removeElementAt(int index);
 }
 
-class DefaultComboBoxModel extends AbstractListModel implements MutableComboBoxModel {
-  java.util.ArrayList<String> __elements = new java.util.ArrayList<String>();
+class DefaultComboBoxModel<E> extends AbstractListModel<E> implements MutableComboBoxModel<E> {
+  java.util.Vector<E> __elements = new java.util.Vector<E>();
   Object __selected = null;
   public DefaultComboBoxModel() {}
-  public DefaultComboBoxModel(String[] items) {
-    for (int i = 0; i < items.length; i++) __elements.add(items[i]);
-    if (!__elements.isEmpty()) __selected = __elements.get(0);
+  public DefaultComboBoxModel(E[] items) {
+    for (int i = 0; i < items.length; i++) __elements.addElement(items[i]);
+    if (!__elements.isEmpty()) __selected = __elements.elementAt(0);
+  }
+  public DefaultComboBoxModel(java.util.Vector<E> items) {
+    __elements = items;
+    if (!__elements.isEmpty()) __selected = __elements.elementAt(0);
   }
   public int getSize() { return __elements.size(); }
-  public Object getElementAt(int index) { return __elements.get(index); }
+  // Out of range is null here, not an exception, as on a JDK.
+  public E getElementAt(int index) {
+    return index >= 0 && index < __elements.size() ? __elements.elementAt(index) : null;
+  }
   public Object getSelectedItem() { return __selected; }
-  // A selection change is reported as a contents change over (-1, -1).
+  // A selection CHANGE is reported, as a contents change over (-1, -1).
   public void setSelectedItem(Object item) {
-    __selected = item;
-    fireContentsChanged(this, -1, -1);
+    if ((__selected != null && !__selected.equals(item)) || (__selected == null && item != null)) {
+      __selected = item;
+      fireContentsChanged(this, -1, -1);
+    }
   }
-  public int getIndexOf(Object item) {
-    if (item == null) return -1;
-    return __elements.indexOf("" + item);
-  }
-  public void addElement(String item) {
-    __elements.add(item);
+  public int getIndexOf(Object item) { return __elements.indexOf(item); }
+  public void addElement(E item) {
+    __elements.addElement(item);
     fireIntervalAdded(this, __elements.size() - 1, __elements.size() - 1);
-    if (__elements.size() == 1 && __selected == null) __selected = item;
+    if (__elements.size() == 1 && __selected == null && item != null) setSelectedItem(item);
   }
-  public void insertElementAt(String item, int index) {
-    __elements.add(index, item);
+  public void insertElementAt(E item, int index) {
+    __elements.insertElementAt(item, index);
     fireIntervalAdded(this, index, index);
   }
   // Removing the selected element moves the selection to a neighbour, as
   // real Swing's DefaultComboBoxModel does.
   public void removeElementAt(int index) {
-    if (getIndexOf(__selected) == index) {
-      if (index == 0) __selected = getSize() > 1 ? __elements.get(1) : null;
-      else __selected = __elements.get(index - 1);
+    if (getElementAt(index) == __selected) {
+      if (index == 0) setSelectedItem(getSize() == 1 ? null : getElementAt(index + 1));
+      else setSelectedItem(getElementAt(index - 1));
     }
-    __elements.remove(index);
+    __elements.removeElementAt(index);
     fireIntervalRemoved(this, index, index);
   }
-  public void removeElement(String item) {
+  public void removeElement(Object item) {
     int index = __elements.indexOf(item);
-    if (index >= 0) removeElementAt(index);
+    if (index != -1) removeElementAt(index);
   }
   public void removeAllElements() {
-    int last = __elements.size() - 1;
-    __elements.clear();
-    __selected = null;
-    if (last >= 0) fireIntervalRemoved(this, 0, last);
+    if (__elements.size() > 0) {
+      int last = __elements.size() - 1;
+      __elements.removeAllElements();
+      __selected = null;
+      fireIntervalRemoved(this, 0, last);
+    } else {
+      __selected = null;
+    }
   }
 }
 
 // Decides how one list row is drawn: return a component configured for `value`.
 // A JList row is a native <option>, so only the component's text and its
 // foreground/background colours reach the screen.
-interface ListCellRenderer {
-  Component getListCellRendererComponent(JList list, Object value, int index,
+interface ListCellRenderer<E> {
+  Component getListCellRendererComponent(JList<? extends E> list, E value, int index,
       boolean isSelected, boolean cellHasFocus);
 }
 
 // The default renderer: a JLabel showing the value's toString(). Subclass it and
 // call super first, then restyle the returned label.
-class DefaultListCellRenderer extends JLabel implements ListCellRenderer {
+class DefaultListCellRenderer extends JLabel implements ListCellRenderer<Object> {
   public DefaultListCellRenderer() { super(""); }
-  public Component getListCellRendererComponent(JList list, Object value, int index,
+  public Component getListCellRendererComponent(JList<?> list, Object value, int index,
       boolean isSelected, boolean cellHasFocus) {
     setText(value == null ? "" : "" + value);
     // The SAME instance is reused for every row, so reset the colours a
@@ -1555,36 +1594,55 @@ class DefaultListCellRenderer extends JLabel implements ListCellRenderer {
   }
 }
 
-class JList extends Component {
-  java.util.ArrayList<String> __items = new java.util.ArrayList<String>();
-  ListModel __model = null;
+// The model a JList built from an array or a Vector reads (a JDK's is an
+// anonymous AbstractListModel over the same data).
+class __FixedListModel<E> extends AbstractListModel<E> {
+  java.util.ArrayList<E> __items = new java.util.ArrayList<E>();
+  public int getSize() { return __items.size(); }
+  public E getElementAt(int index) { return __items.get(index); }
+}
+
+class JList<E> extends Component {
+  // Always model-backed, as a JDK's is: an array or a Vector becomes a fixed
+  // model, so getModel() is never null and getSelectedValue() is the element.
+  ListModel<E> __model = new __FixedListModel<E>();
   ListCellRenderer __cellRenderer = null;
+  ListCellRenderer __defaultRenderer = null;
   // Selected indices, in the order the host reports them.
   java.util.ArrayList<Integer> __selected = new java.util.ArrayList<Integer>();
   int __visibleRows = 8;
   int __mode = 2; // MULTIPLE_INTERVAL_SELECTION, matching real JList
   ListSelectionListener __listener = null;
   public JList() {}
-  public JList(String[] items) { setListData(items); }
-  public JList(ListModel model) { __model = model; }
-  public void setModel(ListModel model) { __model = model; }
-  public ListModel getModel() { return __model; }
-  public void setListData(String[] items) {
-    __model = null;
-    __items = new java.util.ArrayList<String>();
-    for (int i = 0; i < items.length; i++) __items.add(items[i]);
+  public JList(E[] items) { setListData(items); }
+  public JList(java.util.Vector<? extends E> items) { setListData(items); }
+  public JList(ListModel<E> model) { __model = model; }
+  public void setModel(ListModel<E> model) { __model = model; }
+  public ListModel<E> getModel() { return __model; }
+  public void setListData(E[] items) {
+    __FixedListModel<E> model = new __FixedListModel<E>();
+    for (int i = 0; i < items.length; i++) model.__items.add(items[i]);
+    __model = model;
   }
-  // The live elements: read through the model when model-backed (so ANY
-  // ListModel works), else the static data set by setListData.
-  int __size() { return __model != null ? __model.getSize() : __items.size(); }
+  public void setListData(java.util.Vector<? extends E> items) {
+    __FixedListModel<E> model = new __FixedListModel<E>();
+    for (int i = 0; i < items.size(); i++) model.__items.add(items.get(i));
+    __model = model;
+  }
+  int __size() { return __model.getSize(); }
   // The raw element, as a cell renderer sees it.
-  Object __valueAt(int index) { return __model != null ? __model.getElementAt(index) : __items.get(index); }
+  E __valueAt(int index) { return __model.getElementAt(index); }
   String __elementAt(int index) {
     Object value = __valueAt(index);
     return value == null ? "" : "" + value;
   }
-  public void setCellRenderer(ListCellRenderer renderer) { __cellRenderer = renderer; }
-  public ListCellRenderer getCellRenderer() { return __cellRenderer; }
+  public void setCellRenderer(ListCellRenderer<? super E> renderer) { __cellRenderer = renderer; }
+  // Never null, as on a JDK: the default renderer until one is set.
+  public ListCellRenderer<? super E> getCellRenderer() {
+    if (__cellRenderer != null) return __cellRenderer;
+    if (__defaultRenderer == null) __defaultRenderer = new DefaultListCellRenderer();
+    return __defaultRenderer;
+  }
   public int getSelectedIndex() { return __selected.isEmpty() ? -1 : __selected.get(0); }
   public void setSelectedIndex(int index) {
     __selected = new java.util.ArrayList<Integer>();
@@ -1595,15 +1653,23 @@ class JList extends Component {
     for (int i = 0; i < __selected.size(); i++) out[i] = __selected.get(i);
     return out;
   }
-  public Object getSelectedValue() {
+  public E getSelectedValue() {
     if (__selected.isEmpty()) return null;
     int index = __selected.get(0);
     if (index < 0 || index >= __size()) return null;
-    return __elementAt(index);
+    return __valueAt(index);
+  }
+  public java.util.List<E> getSelectedValuesList() {
+    java.util.ArrayList<E> out = new java.util.ArrayList<E>();
+    for (int i = 0; i < __selected.size(); i++) {
+      int index = __selected.get(i);
+      if (index >= 0 && index < __size()) out.add(__valueAt(index));
+    }
+    return out;
   }
   public Object[] getSelectedValues() {
     Object[] out = new Object[__selected.size()];
-    for (int i = 0; i < __selected.size(); i++) out[i] = __elementAt(__selected.get(i));
+    for (int i = 0; i < __selected.size(); i++) out[i] = __valueAt(__selected.get(i));
     return out;
   }
   public boolean isSelectedIndex(int index) { return __selected.contains(index); }
