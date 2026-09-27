@@ -65137,3 +65137,103 @@ public class AccessOrderedMaps {
 }
 "##
 );
+
+// A class that extends a collection and overrides `equals`/`hashCode` is
+// compared by them wherever a JDK asks — a hashed collection's key, `indexOf`,
+// `contains`, `Objects.equals` — and one that overrides `iterator()` is walked
+// by it where a JDK walks it (`toString`, a for-each, `addAll` into a set), but
+// NOT where a JDK reads the contents another way (a copy via `toArray`,
+// `stream`, `forEach`).
+differential_test!(
+    a_collection_subclass_equals_and_iterator,
+    "SubclassEqualsAndIterator",
+    r##"
+import java.util.*;
+import java.util.stream.*;
+
+public class SubclassEqualsAndIterator {
+    // Equal by NAME only, whatever the contents.
+    static class Team extends ArrayList<String> {
+        final String name;
+        Team(String name) { this.name = name; }
+        @Override public boolean equals(Object o) { return o instanceof Team && ((Team) o).name.equals(name); }
+        @Override public int hashCode() { return name.hashCode(); }
+    }
+
+    // Walks its elements backwards.
+    static class Backwards extends ArrayList<Integer> {
+        @Override public Iterator<Integer> iterator() {
+            List<Integer> copy = new ArrayList<>(this);
+            Collections.reverse(copy);
+            return copy.iterator();
+        }
+    }
+
+    public static void main(String[] args) {
+        Team a = new Team("red"); a.add("ann");
+        Team b = new Team("red"); b.add("bob");
+        Team c = new Team("blue"); c.add("ann");
+        System.out.println(a.equals(b) + " " + a.equals(c) + " " + (a.hashCode() == "red".hashCode()));
+        Set<Team> teams = new HashSet<>(List.of(a));
+        System.out.println(teams.contains(b) + " " + teams.contains(c) + " " + teams.add(b) + " " + teams.size());
+        Map<Team, Integer> score = new HashMap<>();
+        score.put(a, 1); score.put(b, 2); score.put(c, 3);
+        System.out.println(score.size() + " " + score.get(new Team("red")));
+        List<Team> list = new ArrayList<>(List.of(c, a));
+        System.out.println(list.indexOf(b) + " " + list.contains(new Team("blue")) + " " + Objects.equals(a, b));
+        List<Object> plain = new ArrayList<>(List.of("ann"));
+        System.out.println(plain.equals(a) + " " + a.equals(plain));
+
+        Backwards w = new Backwards();
+        w.addAll(List.of(1, 2, 3));
+        StringBuilder sb = new StringBuilder();
+        for (int x : w) sb.append(x);
+        System.out.println(sb + " " + w + " " + w.get(0));
+        Iterator<Integer> it = w.iterator();
+        System.out.println(it.next() + " " + w.stream().map(String::valueOf).collect(Collectors.joining()));
+        List<Integer> copy = new ArrayList<>(w);
+        Set<Integer> set = new LinkedHashSet<>(); set.addAll(w);
+        System.out.println(copy + " " + set + " " + String.join(",", w.stream().map(String::valueOf).toArray(String[]::new)));
+        Iterable<Integer> iter = w;
+        for (int x : iter) System.out.print(x);
+        System.out.println();
+        w.forEach(System.out::print);
+        System.out.println();
+    }
+}
+"##
+);
+
+// ...and which library methods ask that `iterator()`: the hashed and sorted
+// sets' copy constructors (they call `addAll`), `Collections.max`/`min`, and
+// not `PriorityQueue`/`LinkedList`/`ArrayDeque` (which copy the array).
+differential_test!(
+    a_collection_subclass_iterator_consumers,
+    "SubclassIteratorConsumers",
+    r##"
+import java.util.*;
+
+public class SubclassIteratorConsumers {
+    static class Evens extends ArrayList<Integer> {
+        @Override public Iterator<Integer> iterator() {
+            List<Integer> evens = new ArrayList<>();
+            for (int i = 0; i < size(); i++) if (get(i) % 2 == 0) evens.add(get(i));
+            return evens.iterator();
+        }
+    }
+    public static void main(String[] args) {
+        Evens e = new Evens();
+        e.addAll(List.of(5, 2, 7, 4, 9, 6));
+        System.out.println(e + " " + e.size());
+        System.out.println(new HashSet<>(e) + " " + new TreeSet<>(e) + " " + new PriorityQueue<>(e).size() + " " + new LinkedList<>(e) + " " + new ArrayDeque<>(e));
+        System.out.println(e.containsAll(List.of(5)) + " " + List.of(5, 2).containsAll(e) + " " + Collections.max(e) + " " + e.contains(5));
+        Set<Integer> t = new TreeSet<>(); t.addAll(e);
+        Deque<Integer> d = new ArrayDeque<>(); d.addAll(e);
+        List<Integer> l = new LinkedList<>(); l.addAll(e);
+        System.out.println(t + " " + d + " " + l);
+        int sum = 0; for (int x : e) sum += x;
+        System.out.println(sum + " " + e.stream().mapToInt(Integer::intValue).sum());
+    }
+}
+"##
+);

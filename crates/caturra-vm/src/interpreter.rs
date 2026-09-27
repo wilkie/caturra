@@ -3706,9 +3706,12 @@ impl<'run> Interpreter<'run> {
                     "java.lang.NullPointerException",
                 )));
             };
-            let elements = self.materialized_elements(source)?;
+            // Sized by the source's `size()`, filled by `addAll` — which walks
+            // it with its own iterator.
+            let size = self.materialized_elements(source)?.len();
+            let elements = self.iterated_elements(source)?;
             #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
-            let hint = std::cmp::max((elements.len() as f32 / 0.75) as i32 + 1, 16);
+            let hint = std::cmp::max((size as f32 / 0.75) as i32 + 1, 16);
             let linked = target_class == "java/util/LinkedHashSet";
             if let Some(HeapObject::HashSet(map)) = self.heap.get_mut(receiver) {
                 *map = crate::map::JavaHashMap::with_capacity_hint(hint).as_linked(linked);
@@ -3793,7 +3796,7 @@ impl<'run> Interpreter<'run> {
                 {
                     *slot = comparator;
                 }
-                for element in self.materialized_elements(source)? {
+                for element in self.iterated_elements(source)? {
                     self.tree_set_add(receiver, element)?;
                 }
                 return Ok(None);
@@ -4973,8 +4976,36 @@ impl<'run> Interpreter<'run> {
                 )
                 .map(|_| extension.class_name.to_string())
             });
+        // ...and one whose class walks itself renders what its own
+        // `iterator()` hands back, as `AbstractCollection.toString` does.
+        let walked = if overridden.is_none() && !suppressed {
+            match self.call_extension_override(
+                reference,
+                "iterator",
+                "()Ljava/util/Iterator;",
+                &[],
+            )? {
+                Some(Some(JValue::Ref(Some(cursor)))) => {
+                    let mut items = Vec::new();
+                    while matches!(
+                        self.call_zero_arg(cursor, "hasNext", "()Z")?,
+                        Some(JValue::Int(flag)) if flag != 0
+                    ) {
+                        items.push(
+                            self.call_zero_arg(cursor, "next", "()Ljava/lang/Object;")?
+                                .unwrap_or(JValue::NULL),
+                        );
+                    }
+                    Some(items)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
         let renderable = match self.heap.get(reference) {
             _ if let Some(class_name) = overridden => Renderable::Instance(class_name),
+            _ if let Some(items) = walked => Renderable::List(items),
             Some(HeapObject::Instance { class_name, .. }) => {
                 Renderable::Instance(class_name.to_string())
             }
@@ -5613,6 +5644,15 @@ impl<'run> Interpreter<'run> {
                 )
                 .then(|| (reference, self.collection_elements(reference)))
             });
+        // `max`/`min`/`frequency` walk the collection with its OWN iterator,
+        // which a class that extends it may have replaced.
+        let items = if matches!(method_name, "max" | "min" | "frequency")
+            && self.heap.extension(reference).is_some()
+        {
+            Some((reference, self.iterated_elements(reference)?))
+        } else {
+            items
+        };
         match (method_name, args) {
             // A `null` comparator is natural ordering, which is what a JDK's
             // `sort(list, null)` means — the pattern took a comparator or no
@@ -7815,8 +7855,66 @@ impl<'run> Interpreter<'run> {
     /// `a.equals(b)`, dispatching a user `equals(Object)` override. Values the
     /// VM can compare on its own (primitives, wrappers, strings, null) never
     /// run Java.
+    /// Run a PROGRAM class's override of a collection method on a collection
+    /// that class extends — `None` when the object is no such collection or
+    /// the class does not override it.
+    fn call_extension_override(
+        &mut self,
+        reference: HeapRef,
+        method_name: &str,
+        descriptor: &str,
+        args: &[JValue],
+    ) -> Result<Option<Option<JValue>>, VmError> {
+        let Some(extension) = self.heap.extension(reference) else {
+            return Ok(None);
+        };
+        let class_name = extension.class_name.clone();
+        let Some((class, method)) =
+            resolve_virtual(self.classes, &class_name, method_name, descriptor).or_else(|| {
+                resolve_erased_override(self.classes, &class_name, method_name, descriptor)
+            })
+        else {
+            return Ok(None);
+        };
+        let mut locals = Vec::with_capacity(1 + args.len());
+        locals.push(JValue::Ref(Some(reference)));
+        locals.extend_from_slice(args);
+        let callee = self.make_frame(class, method, locals)?;
+        Ok(Some(self.run_nested(callee)?))
+    }
+
+    /// The elements of a collection handed to a JDK method that walks it with
+    /// a for-each (`AbstractCollection.addAll`): through the program's own
+    /// `iterator()` when a class that extends the collection declares one,
+    /// and straight from the collection otherwise.
+    fn iterated_elements(&mut self, source: HeapRef) -> Result<Vec<JValue>, VmError> {
+        let Some(Some(JValue::Ref(Some(cursor)))) =
+            self.call_extension_override(source, "iterator", "()Ljava/util/Iterator;", &[])?
+        else {
+            return self.materialized_elements(source);
+        };
+        let mut items = Vec::new();
+        while matches!(
+            self.call_zero_arg(cursor, "hasNext", "()Z")?,
+            Some(JValue::Int(flag)) if flag != 0
+        ) {
+            items.push(
+                self.call_zero_arg(cursor, "next", "()Ljava/lang/Object;")?
+                    .unwrap_or(JValue::NULL),
+            );
+        }
+        Ok(items)
+    }
+
     fn java_equals(&mut self, a: JValue, b: JValue) -> Result<bool, VmError> {
         use crate::value::HeapObject;
+        // A collection whose program class overrides `equals` answers by it.
+        if let JValue::Ref(Some(reference)) = a
+            && let Some(returned) =
+                self.call_extension_override(reference, "equals", "(Ljava/lang/Object;)Z", &[b])?
+        {
+            return Ok(matches!(returned, Some(JValue::Int(result)) if result != 0));
+        }
         if let JValue::Ref(Some(reference)) = a
             && let Some(HeapObject::Instance { class_name, .. }) = self.heap.get(reference)
         {
@@ -7847,6 +7945,15 @@ impl<'run> Interpreter<'run> {
     /// `value.hashCode()`, dispatching a user `hashCode()` override.
     fn java_hash_code(&mut self, value: JValue) -> Result<i32, VmError> {
         use crate::value::HeapObject;
+        if let JValue::Ref(Some(reference)) = value
+            && let Some(returned) =
+                self.call_extension_override(reference, "hashCode", "()I", &[])?
+        {
+            return Ok(match returned {
+                Some(JValue::Int(hash)) => hash,
+                _ => 0,
+            });
+        }
         // A `java.time` value hashes by its FIELDS, as it compares by them —
         // without this a `HashSet<LocalDate>` held two equal dates, which is
         // the one place the difference shows.
@@ -10037,7 +10144,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source)? {
+                for element in self.iterated_elements(*source)? {
                     changed |= self.set_add(receiver, element)?;
                 }
                 JValue::Int(i32::from(changed))
@@ -10418,7 +10525,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source)? {
+                for element in self.iterated_elements(*source)? {
                     changed |= self.tree_set_add(receiver, element)?;
                 }
                 JValue::Int(i32::from(changed))
@@ -11690,7 +11797,7 @@ impl<'run> Interpreter<'run> {
             }
             ("addAll", [JValue::Ref(Some(source))]) => {
                 let mut changed = false;
-                for element in self.materialized_elements(*source)? {
+                for element in self.iterated_elements(*source)? {
                     self.pq_offer(receiver, element)?;
                     changed = true;
                 }

@@ -2802,7 +2802,12 @@ fn desugar_stmt(stmt: &mut Stmt, ctx: &mut Ctx) {
             body,
             ..
         } => {
-            if !ctx.faces.is_empty() {
+            // ...unless the class walks itself: its own `iterator()` is what
+            // a for-each asks for.
+            if !ctx.faces.is_empty()
+                && !declared_class_name(iterable, ctx)
+                    .is_some_and(|class| declared_shape(&class, "iterator", 0, ctx).is_some())
+            {
                 upcast_collection_value(iterable, None, 0, 0, ctx);
             }
             desugar_expr(iterable, None, ctx);

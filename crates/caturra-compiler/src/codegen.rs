@@ -39210,11 +39210,15 @@ impl BodyGen<'_> {
         // it with — the program's own class is the only thing that knows how to
         // walk itself. (`Iterator` itself is not `Iterable`, so a bare cursor
         // in a for-each stays the error javac reports.)
+        // ...and so is a class that extends a builtin collection and
+        // declares its OWN `iterator()`: a for-each walks what it hands back.
         if let Some(class) = iterable_ty.erased_class()
-            && self
+            && (self
                 .table
                 .class_id("Iterable")
                 .is_some_and(|id| self.table.is_subtype(class, id))
+                || (self.table.builtin_face(class).is_some()
+                    && self.program_declares(self.table.class_name(class), "iterator", &[])))
         {
             self.for_each_cursor(ty, name, is_final, iterable_ty, class, body, span);
             return;

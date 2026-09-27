@@ -12623,9 +12623,19 @@ rendering (`[deck]`, `{k=deck}`) prints the override of `toString` — while
 `super.toString()` inside that override renders the collection itself.
 `clone()` answers an instance of the program class with its fields copied.
 
-Not modelled: an override of `iterator()` does not change how the library
-walks the collection; a program `equals`/`hashCode` on an extended object is
-not what a hashed collection asks.
+**A program's own `equals`, `hashCode` and `iterator()`.** The VM's equality
+and hashing (`java_equals`/`java_hash_code` — a hashed collection's key,
+`indexOf`, `contains`, `Objects.equals`) run the program class's override
+first. An `iterator()` override is walked exactly where a JDK walks one:
+`toString` (`AbstractCollection`'s), a for-each over the class (codegen drives
+it through the cursor, as it does any program `Iterable`), `addAll` into a
+`HashSet`/`LinkedHashSet`/`TreeSet`/`PriorityQueue` and the two sets' copy
+constructors (which call `addAll`), and `Collections.max`/`min`/`frequency`.
+It is NOT walked where a JDK reads the contents another way — `new
+ArrayList<>(c)`, `LinkedList`/`ArrayDeque`/`PriorityQueue` copies and
+`list.addAll(c)` (all `toArray`), `stream()` (the spliterator) and `forEach`
+(`ArrayList`'s own). Other library methods that take a collection read its
+contents directly.
 
 **The LRU cache.** The reason most programs extend `LinkedHashMap`:
 
@@ -12656,7 +12666,9 @@ insertion, and a `true` removes it. The hooks are read at the map's API
 (`map_intrinsic`), as whether the key was there before the call and whether
 the map grew, so the many internal paths through `map_put` are untouched.
 
-Pinned by `lru_cache` and `access_ordered_maps`.
+Pinned by `lru_cache` and `access_ordered_maps`; the overrides by
+`a_collection_subclass_equals_and_iterator` and
+`a_collection_subclass_iterator_consumers`.
 
 Pinned by `a_class_that_extends_a_collection`,
 `a_collection_subclass_overrides_and_calls_super`,
