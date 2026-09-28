@@ -66017,3 +66017,315 @@ public class FunctionalElements {
 }
 "#
 );
+
+// The negative direction for the functional interfaces: their type ARITY is
+// counted (they resolve whatever they are given, so it never was), and their
+// own method's arguments are checked against the DECLARED parameter types —
+// which codegen cannot see, a function being carried as its result alone.
+
+differential_wording!(
+    a_functional_interface_with_the_wrong_arity,
+    "FunctionalArity",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class FunctionalArity {
+    static void n() {
+        Function<String> f = s -> s;
+    }
+
+    public static void main(String[] args) {}
+}
+"#
+);
+
+differential_wording!(
+    a_predicate_given_the_wrong_argument,
+    "PredicateArgument",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class PredicateArgument {
+    static void n() {
+        Predicate<String> p = s -> true;
+        p.test(1);
+    }
+
+    public static void main(String[] args) {}
+}
+"#
+);
+
+differential_wording!(
+    a_comparator_given_the_wrong_argument,
+    "ComparatorArgument",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class ComparatorArgument {
+    static void n() {
+        Comparator<String> c = Comparator.naturalOrder();
+        c.compare("a", 3);
+    }
+
+    public static void main(String[] args) {}
+}
+"#
+);
+
+differential_wording!(
+    a_bifunction_given_the_wrong_argument,
+    "BiFunctionArgument",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class BiFunctionArgument {
+    static void n() {
+        BiFunction<String, Integer, String> f = (x, y) -> x;
+        f.apply("a", "b");
+    }
+
+    public static void main(String[] args) {}
+}
+"#
+);
+
+// ...and a value returned from a lambda whose method is `void`, and an
+// element written into a `? extends` collection, in javac's words.
+
+differential_wording!(
+    a_value_returned_from_a_void_lambda,
+    "VoidLambdaReturn",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class VoidLambdaReturn {
+    static void n() {
+        Runnable r = () -> {
+            return 1;
+        };
+    }
+
+    public static void main(String[] args) {}
+}
+"#
+);
+
+differential_wording!(
+    writing_into_an_extends_collection,
+    "ExtendsWrite",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class ExtendsWrite {
+    static void n() {
+        List<? extends Number> l = new ArrayList<Integer>();
+        l.add(1);
+    }
+
+    public static void main(String[] args) {}
+}
+"#
+);
+
+// What the argument check leaves alone: boxing into the declared wrapper,
+// a supertype parameter, a variable of the right type, null.
+differential_test!(
+    functional_arguments_that_fit,
+    "FunctionalArgumentsFit",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class FunctionalArgumentsFit {
+    public static void main(String[] args) {
+        Function<Integer, Integer> twice = x -> x * 2;
+        Function<Number, String> show = n -> "n" + n;
+        Predicate<Object> any = o -> o != null;
+        Comparator<Integer> cmp = Integer::compare;
+        BiFunction<String, Integer, String> rep = String::repeat;
+        String s = "ab";
+        System.out.println(twice.apply(5) + " " + twice.apply(Integer.valueOf(3)) + " " + show.apply(5) + " " + show.apply(2.5)
+            + " " + any.test(1) + any.test(null) + " " + cmp.compare(1, 2) + " " + rep.apply(s, 2));
+    }
+}
+"#
+);
+
+// The second negative batch's headlines: a blank final in a class with NO
+// constructor is "not initialized in the default constructor" (even a static
+// one), a String as a resource is "try-with-resources not applicable", a bare
+// expression is "not a statement", and an argument outside a generic method's
+// bound is the inference failure, not a conversion.
+
+differential_wording!(
+    a_blank_final_and_the_default_constructor,
+    "DefaultCtorFinal",
+    r#"
+import java.util.*;
+
+public class DefaultCtorFinal {
+    static class P {
+        final int v;
+    }
+
+    public static void main(String[] args) {
+        
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_static_blank_final_and_the_default_constructor,
+    "DefaultCtorStatic",
+    r#"
+import java.util.*;
+
+public class DefaultCtorStatic {
+    static final int K;
+
+    public static void main(String[] args) {
+        
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_string_as_a_resource,
+    "StringResource",
+    r#"
+import java.util.*;
+
+public class StringResource {
+    
+
+    public static void main(String[] args) {
+        try (String s = "x") {
+        }
+    }
+}
+"#
+);
+
+differential_wording!(
+    an_expression_that_is_not_a_statement,
+    "NotAStatement",
+    r#"
+import java.util.*;
+
+public class NotAStatement {
+    
+
+    public static void main(String[] args) {
+        String s = "x";
+        s.length;
+    }
+}
+"#
+);
+
+differential_wording!(
+    an_argument_outside_a_bound,
+    "OutsideTheBound",
+    r#"
+import java.util.*;
+
+public class OutsideTheBound {
+    static <T extends Comparable<T>> T max(T a, T b) {
+        return a;
+    }
+
+    public static void main(String[] args) {
+        max(new Object(), new Object());
+    }
+}
+"#
+);
+
+// The third negative batch's headlines: `!` on an int, an expression lambda
+// whose method is void, a block lambda that returns nothing where a value is
+// owed, and a library constructor given no arguments.
+
+differential_wording!(
+    not_applied_to_an_int,
+    "NotOnInt",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class NotOnInt {
+    public static void main(String[] args) {
+        boolean b = !5;
+    }
+}
+"#
+);
+
+differential_wording!(
+    an_expression_lambda_for_a_void_method,
+    "VoidExpressionLambda",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class VoidExpressionLambda {
+    public static void main(String[] args) {
+        Runnable r = () -> 5;
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_block_lambda_that_returns_nothing,
+    "LambdaReturnsNothing",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class LambdaReturnsNothing {
+    public static void main(String[] args) {
+        Supplier<String> s = () -> {
+        };
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_wrapper_constructor_with_no_arguments,
+    "WrapperNoArgs",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class WrapperNoArgs {
+    public static void main(String[] args) {
+        Integer i = new Integer();
+    }
+}
+"#
+);
+
+differential_wording!(
+    a_scanner_with_no_arguments,
+    "ScannerNoArgs",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class ScannerNoArgs {
+    public static void main(String[] args) {
+        Scanner sc = new Scanner();
+    }
+}
+"#
+);

@@ -610,11 +610,17 @@ fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>)
             }
         }
         if assigned_in.is_none() {
-            diagnostics.push(Diagnostic::error(
-                path,
-                format!("variable {} might not have been initialized", field.name),
-                field.span,
-            ));
+            // javac words it by the constructor that is left to blame: in a
+            // class with none, the DEFAULT one (even for a static field).
+            let message = if decl.methods.iter().any(|m| m.is_constructor) {
+                format!("variable {} might not have been initialized", field.name)
+            } else {
+                format!(
+                    "variable {} not initialized in the default constructor",
+                    field.name
+                )
+            };
+            diagnostics.push(Diagnostic::error(path, message, field.span));
         }
     }
 
@@ -647,11 +653,15 @@ fn blank_finals(decl: &ClassDecl, path: &str, diagnostics: &mut Vec<Diagnostic>)
         if assigned_by_initializer.contains(&field.name.as_str()) {
             continue;
         }
-        // With no constructor at all, the default one assigns nothing.
+        // With no constructor at all, the default one assigns nothing — and
+        // javac says it that way.
         if constructors.is_empty() {
             diagnostics.push(Diagnostic::error(
                 path,
-                format!("variable {} might not have been initialized", field.name),
+                format!(
+                    "variable {} not initialized in the default constructor",
+                    field.name
+                ),
                 field.span,
             ));
             continue;
@@ -1261,10 +1271,11 @@ mod tests {
             "class M { final int f; M() { } }",
             "variable f might not have been initialized",
         );
-        // No constructor at all: the default one assigns nothing.
+        // No constructor at all: the default one assigns nothing, and javac
+        // names it.
         rejects_with(
             "class M { final int f; }",
-            "variable f might not have been initialized",
+            "variable f not initialized in the default constructor",
         );
         // Assigned on only one branch.
         rejects_with(

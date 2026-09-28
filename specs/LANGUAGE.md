@@ -12548,6 +12548,70 @@ its lambda protocol uses (`IntStream.reduce` asks for `apply`) finds the
 erased method instead (`erased_functional_method`). Pinned by
 `a_class_implements_a_primitive_functional_interface`.
 
+### Functional interfaces in the negative direction (2026-09-27)
+
+A batch of thirty programs javac refuses, each wrong in one ordinary way,
+found the functional interfaces accepting what javac does not:
+
+- **Their arity was never counted.** A functional type resolves whatever it
+  is given (its arguments erase), so `Function<String>`, `Supplier<String,
+  String>` and `BiFunction<String, String>` compiled. `type_arity_error` now
+  counts them against the JDK's declarations (`functional_arity`) — javac's
+  "wrong number of type arguments; required 2".
+- **Their own method's arguments were never checked.** A function is carried
+  as its erased interface and its RESULT, so `Predicate<String>.test(1)`,
+  `Comparator<String>.compare("a", 3)` and `BiFunction<String, Integer,
+  String>.apply("a", "b")` compiled. The lambda pass, which still holds the
+  declared type, checks each argument where a mismatch is provable — a
+  primitive, a final library type or a program class against a final library
+  type or a program class — in javac's words ("int cannot be converted to
+  String"); boxing into the declared wrapper, a supertype parameter and
+  `null` pass.
+
+Two wordings came into line with javac's at the same time: a value returned
+from a lambda whose method is `void` is "bad return type in lambda
+expression" (a METHOD's own is still "unexpected return value"), and an
+element written into a `? extends` collection is "int cannot be converted to
+CAP#1", naming the capture, where the element is the method's last argument.
+A second batch of forty — exceptions, constructors, `final`, `switch`,
+arrays, enums, generic methods, interfaces — was refused by both engines
+throughout; five headlines were brought into javac's words. A blank final in a
+class with NO constructor is "variable v not initialized in the default
+constructor" (javac says it even of a static one); with any constructor it
+stays "might not have been initialized". A `String` (or a number, a
+collection, an array) as a try-with-resources resource is "try-with-resources
+not applicable to variable type" — and the desugaring's second `close()` call
+now sits at the resource too, so its "cannot find symbol" comes after, not
+before. A bare expression is javac's plain "not a statement". An argument
+outside the BOUND of the generic method's type variable it is written as
+(`max(new Object(), new Object())` for `<T extends Comparable<T>>`) is the
+inference failure — "method max in class Main cannot be applied to given
+types;" with the variable — where the one-candidate rule blamed the argument.
+
+Pinned by `a_functional_interface_with_the_wrong_arity`,
+`a_predicate_given_the_wrong_argument`,
+`a_comparator_given_the_wrong_argument`,
+`a_bifunction_given_the_wrong_argument`, `a_value_returned_from_a_void_lambda`,
+`writing_into_an_extends_collection`, `functional_arguments_that_fit`,
+`a_blank_final_and_the_default_constructor`,
+`a_static_blank_final_and_the_default_constructor`, `a_string_as_a_resource`,
+`an_expression_that_is_not_a_statement` and `an_argument_outside_a_bound`.
+
+A third batch of forty (operators, library call shapes, `var`, loops,
+literals) was refused throughout too, and five more headlines came into line:
+`!` on an `int` is "bad operand type int for unary operator '!'"; an
+EXPRESSION lambda whose method is `void` and whose body is no statement is
+"lambda body is not compatible with a void functional interface"; a BLOCK
+lambda that falls off the end where a value is owed is "bad return type in
+lambda expression / missing return value" (a method's own is still "missing
+return statement"); and a wrapper or `Scanner` constructor given the wrong
+arguments leads with javac's "no suitable constructor found for
+Integer(no arguments)", keeping caturra's hint beneath it. The parser's own
+wordings (a declaration as a loop body, a malformed literal) stay its own.
+Pinned by `not_applied_to_an_int`, `an_expression_lambda_for_a_void_method`,
+`a_block_lambda_that_returns_nothing`,
+`a_wrapper_constructor_with_no_arguments` and `a_scanner_with_no_arguments`.
+
 ### A functional element keeps its result; `Local::new` (2026-09-27)
 
 A PARAMETERIZED functional interface as a collection element —

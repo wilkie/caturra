@@ -5619,6 +5619,18 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
                     return Some(inner);
                 }
             }
+            // The FUNCTIONAL interfaces resolve whatever they are given (their
+            // arguments erase), so their arity is counted here, from the JDK's
+            // declarations: `Function<String>` is javac's "required 2".
+            let simple = base.rsplit('.').next().unwrap_or(base);
+            if !table.declares_class(simple)
+                && let Some(declared) = functional_arity(simple)
+                && declared != args.len()
+            {
+                return Some(format!(
+                    "wrong number of type arguments; required {declared}"
+                ));
+            }
             // Only a class the PROGRAM declares is checked: the library types
             // are modelled by hand, and their arities here are approximate
             // (a `Map.Entry` argument names an entrySet's type, not a value).
@@ -5706,6 +5718,20 @@ fn type_arity_error(ty: &TypeRef, table: &MethodTable) -> Option<String> {
         }
         _ => None,
     }
+}
+
+/// How many type parameters a JDK functional interface declares.
+fn functional_arity(simple: &str) -> Option<usize> {
+    Some(match simple {
+        "Supplier" | "Consumer" | "Predicate" | "UnaryOperator" | "BinaryOperator"
+        | "Comparator" | "Callable" | "IntFunction" | "LongFunction" | "DoubleFunction"
+        | "ToIntFunction" | "ToLongFunction" | "ToDoubleFunction" | "ObjIntConsumer"
+        | "ObjLongConsumer" | "ObjDoubleConsumer" => 1,
+        "Function" | "BiConsumer" | "BiPredicate" | "ToIntBiFunction" | "ToLongBiFunction"
+        | "ToDoubleBiFunction" => 2,
+        "BiFunction" => 3,
+        _ => return None,
+    })
 }
 
 /// The library interfaces a program can only write RAW, and can still ask
@@ -12672,10 +12698,14 @@ fn emit_method(
     {
         // Under the body's CLOSING brace, where javac puts it — the point the
         // method can fall off.
-        body.error(
-            decl.body_end.unwrap_or(decl.span),
-            "missing return statement",
-        );
+        // A LAMBDA's body is the functional interface's method: javac says
+        // the lambda returns nothing where it must return a value.
+        let message = if crate::is_lambda_class(&class_decl.name) {
+            "incompatible types: bad return type in lambda expression\n    missing return value"
+        } else {
+            "missing return statement"
+        };
+        body.error(decl.body_end.unwrap_or(decl.span), message);
     }
     body.code.push_op(op::RETURN, 0);
 
@@ -29938,10 +29968,14 @@ impl BodyGen<'_> {
             }
             (None, Some(value)) => {
                 self.expr(value);
-                self.error(
-                    value.span(),
-                    "incompatible types: unexpected return value (this method is void)",
-                );
+                // In a LAMBDA the method is the functional interface's, and
+                // javac words it as the lambda's return being wrong.
+                let message = if crate::is_lambda_class(self.current_class) {
+                    "incompatible types: bad return type in lambda expression\n    unexpected return value"
+                } else {
+                    "incompatible types: unexpected return value (this method is void)"
+                };
+                self.error(value.span(), message);
             }
             (Some(expected), None) => {
                 if expected != JType::Error {
@@ -33123,7 +33157,22 @@ impl BodyGen<'_> {
     /// argument (a primitive, or a String to parse).
     fn new_wrapper(&mut self, elem: ElemType, args: &[Expr], span: SourceSpan) -> JType {
         let [arg] = args else {
-            self.error(span, "a wrapper constructor takes one argument");
+            // javac's headline, then what a wrapper constructor takes.
+            let class = source_type_name(wrapper_internal(elem));
+            let found = if args.is_empty() {
+                String::from("no arguments")
+            } else {
+                args.iter()
+                    .map(|a| self.type_of(a).describe(self.table))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            };
+            self.error(
+                span,
+                format!(
+                    "no suitable constructor found for {class}({found})\n  a wrapper constructor takes one argument"
+                ),
+            );
             return JType::Error;
         };
         let prim = elem.base_type();
@@ -34166,10 +34215,20 @@ impl BodyGen<'_> {
                 return JType::Scanner;
             }
         }
+        let found = if args.is_empty() {
+            String::from("no arguments")
+        } else {
+            args.iter()
+                .map(|a| self.type_of(a).describe(self.table))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
         self.error(
             span,
-            "Scanner reads System.in, a File, or a String: new Scanner(System.in) / \
-             new Scanner(new File(\"data.txt\")) / new Scanner(\"text\")",
+            format!(
+                "no suitable constructor found for Scanner({found})\n  Scanner reads System.in, a File, or a String: new Scanner(System.in) / \
+                 new Scanner(new File(\"data.txt\")) / new Scanner(\"text\")"
+            ),
         );
         JType::Error
     }
@@ -36241,6 +36300,35 @@ impl BodyGen<'_> {
     /// and one that has none already fails to resolve the call with a message
     /// of its own. This way the check never rejects something valid.
     fn check_resource_type(&mut self, receiver_ty: JType, span: SourceSpan) {
+        // A library value that is certainly NOT closeable — a String, a
+        // number, a collection, an array — is refused as javac refuses it,
+        // before its missing `close()` becomes "cannot find symbol".
+        let not_closeable = matches!(
+            receiver_ty,
+            JType::Str
+                | JType::StringBuilder(_)
+                | JType::Boxed(_)
+                | JType::Array { .. }
+                | JType::List { .. }
+                | JType::Set { .. }
+                | JType::Map { .. }
+                | JType::TreeSet(..)
+                | JType::TreeMap { .. }
+                | JType::LinkedList { .. }
+                | JType::Stack(_)
+                | JType::Optional(_)
+        ) || boxable_primitive(receiver_ty).is_some();
+        if not_closeable {
+            let name = receiver_ty.describe(self.table);
+            self.error(
+                span,
+                format!(
+                    "incompatible types: try-with-resources not applicable to variable type \
+                     ({name} cannot be converted to AutoCloseable)"
+                ),
+            );
+            return;
+        }
         let class = match receiver_ty {
             JType::Object(id) => id,
             JType::Generic { class, .. } => class,
@@ -36293,7 +36381,12 @@ impl BodyGen<'_> {
         // requires the type to be `AutoCloseable`; merely HAVING a `close()`
         // method is not enough, and javac says so.
         let method = if method == RESOURCE_CLOSE {
+            let before = self.diagnostics.len();
             self.check_resource_type(receiver_ty, span);
+            // Refused as a resource: its `close()` is not looked for too.
+            if self.diagnostics.len() > before {
+                return None;
+            }
             "close"
         } else {
             method
@@ -37201,15 +37294,37 @@ impl BodyGen<'_> {
             // to name the internal class from the instance table, so a
             // student was shown `in java/util/ArrayList` — slashes and all —
             // for a collection they declared as a `List<? extends Number>`.
-            let described = receiver_ty.describe(self.table);
-            self.error(
-                span,
-                format!(
-                    "no suitable method found for {method}(...) in {described}: a \
-                     '? extends' collection cannot be written to (its element \
-                     type is an unknown subtype)"
-                ),
+            // javac names the CAPTURE the element became: "int cannot be
+            // converted to CAP#1", where the element is the method's last
+            // argument (`add(x)`, `add(i, x)`, `set(i, x)`, `offer(x)`).
+            let single_element = matches!(
+                method,
+                "add"
+                    | "offer"
+                    | "push"
+                    | "addFirst"
+                    | "addLast"
+                    | "offerFirst"
+                    | "offerLast"
+                    | "set"
             );
+            if single_element && let Some(last) = arg_types.last() {
+                let what = last.describe(self.table);
+                self.error(
+                    args.last().map_or(span, Expr::span),
+                    format!("incompatible types: {what} cannot be converted to CAP#1"),
+                );
+            } else {
+                let described = receiver_ty.describe(self.table);
+                self.error(
+                    span,
+                    format!(
+                        "no suitable method found for {method}(...) in {described}: a \
+                         '? extends' collection cannot be written to (its element \
+                         type is an unknown subtype)"
+                    ),
+                );
+            }
             for arg in args {
                 self.expr(arg);
             }
@@ -39002,6 +39117,10 @@ impl BodyGen<'_> {
                             .declaring_class(&class_name, method)
                             .unwrap_or_else(|| class_name.clone())
                     );
+                    if let Some(message) = self.bound_violation(method, &described, &arg_types) {
+                        self.error(span, message);
+                        return None;
+                    }
                     self.inapplicable_error(
                         method,
                         &described,
@@ -40082,7 +40201,14 @@ impl BodyGen<'_> {
                 Some(Some(self.expr(expr)))
             }
             _ => {
-                self.error(expr.span(), "this expression is not a statement in Java");
+                // An EXPRESSION lambda whose method is `void` gets here with
+                // its body as a statement: javac words it as the lambda.
+                let message = if crate::is_lambda_class(self.current_class) {
+                    "incompatible types: lambda body is not compatible with a void functional interface\n    (consider using a block lambda body, or use a statement expression instead)"
+                } else {
+                    "not a statement"
+                };
+                self.error(expr.span(), message);
                 return;
             }
         };
@@ -40955,6 +41081,10 @@ impl BodyGen<'_> {
                     sig
                 } else {
                     let described = format!("class {class}");
+                    if let Some(message) = self.bound_violation(method, &described, &arg_types) {
+                        self.error(span, message);
+                        return None;
+                    }
                     self.inapplicable_error(
                         method,
                         &described,
@@ -43066,6 +43196,71 @@ impl BodyGen<'_> {
     /// A variable named only by DIRECT parameters (`<T> T pick(T a, T b)`) is
     /// not this: javac joins them at their least upper bound, and
     /// `pick("a", 1)` compiles. Only an exact pin can be contradicted.
+    /// A generic method whose ONE candidate fails only because an argument is
+    /// outside the BOUND of the type variable it is written as (`<T extends
+    /// Comparable<T>> T max(T, T)` given an `Object`): javac reports the
+    /// inference failure — "cannot be applied to given types", with the
+    /// variable — where the single-candidate rule would blame the argument.
+    fn bound_violation(
+        &self,
+        method: &str,
+        described: &str,
+        arg_types: &[JType],
+    ) -> Option<String> {
+        // The ONE method of this name and arity, up the class chain.
+        let class = described.strip_prefix("class ").unwrap_or(described);
+        let mut found: Vec<&MethodSig> = Vec::new();
+        let mut current = self.table.class_id(class);
+        for _ in 0..=self.table.class_names.len() {
+            let Some(id) = current else {
+                break;
+            };
+            let Some(info) = self.table.info_by_id(id) else {
+                break;
+            };
+            found.extend(
+                info.methods
+                    .iter()
+                    .filter(|m| m.name == method && m.params.len() == arg_types.len()),
+            );
+            current = info.superclass;
+        }
+        let [sig] = found[..] else {
+            return None;
+        };
+        if sig.var_sources.is_empty() || sig.written.len() != arg_types.len() {
+            return None;
+        }
+        let variable = sig
+            .written
+            .iter()
+            .zip(&sig.params)
+            .zip(arg_types)
+            .enumerate()
+            .find_map(|(at, ((written, erased), actual))| {
+                let outside = matches!(written, JType::TypeVar(_))
+                    && *erased != JType::Object(self.table.object_id)
+                    && *actual != JType::Null
+                    && !widens(*actual, *erased, self.table)
+                    && !boxable_primitive(*actual)
+                        .is_some_and(|elem| widens(JType::Boxed(elem), *erased, self.table));
+                outside
+                    .then(|| {
+                        sig.var_sources.iter().find(|(_, sources)| {
+                            sources.contains(&crate::ast::InferSource::Direct(at))
+                        })
+                    })
+                    .flatten()
+                    .map(|(name, _)| name.clone())
+            })?;
+        Some(format!(
+            "method {method} in {} cannot be applied to given types;\n  required: {}\n  found: {}\n  reason: inference variable {variable} has incompatible bounds",
+            source_type_name(described),
+            argument_list(&sig.written, self.table),
+            argument_list(arg_types, self.table)
+        ))
+    }
+
     fn generic_variables_agree<'v>(
         &self,
         sig: &'v MethodSig,
@@ -46571,6 +46766,10 @@ impl BodyGen<'_> {
     }
 
     fn emit_call_args_inner(&mut self, args: &[Expr], sig: &MethodSig, span: SourceSpan) -> u16 {
+        // An argument outside the BOUND of the method's own type variable it
+        // is written as (`<T extends Comparable<T>> T max(T, T)` given an
+        // `Object`): javac finds the method inapplicable — inference fails —
+        // rather than reporting a conversion.
         if !sig.is_varargs {
             for (at, arg) in args.iter().enumerate().take(sig.params.len()) {
                 let param = self.sam_parameter(sig, at, arg);
@@ -47320,7 +47519,7 @@ impl BodyGen<'_> {
                     self.error(
                         span,
                         format!(
-                            "operator '!' cannot be applied to {}",
+                            "bad operand type {} for unary operator '!'",
                             ty.describe(self.table)
                         ),
                     );

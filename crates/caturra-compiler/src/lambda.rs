@@ -3468,6 +3468,12 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 ctx.diags
                     .push(crate::diagnostics::Diagnostic::error(ctx.path, message, at));
             }
+            // `f.apply(5)` on a `Function<String, Integer>`: the interface's
+            // own method takes what the DECLARATION says, which codegen (that
+            // keeps only the result) cannot check — this pass can.
+            if let Some(owner) = receiver.as_deref() {
+                check_sam_arguments(owner, method, args, *span, ctx);
+            }
             // A call on a class that extends a builtin collection, for a
             // member the collection declares: read through the upcast.
             if let Some(face) = face_receiver(receiver.as_deref(), method, args.len(), ctx) {
@@ -5469,6 +5475,106 @@ fn check_witnessed_arguments(
             format!("incompatible types: {described} cannot be converted to {wanted}"),
             span,
         ));
+    }
+}
+
+/// Report an argument to a functional interface's OWN method that its declared
+/// type provably refuses — `Predicate<String>.test(1)`, `Comparator<String>
+/// .compare("a", 3)`, `BiFunction<String, Integer, String>.apply("a", "b")` —
+/// in javac's words. Only on footing where the mismatch is provable: a
+/// primitive or a final library type or a program class, against a declared
+/// final library type or program class.
+fn check_sam_arguments(
+    owner: &Expr,
+    method: &str,
+    args: &[Expr],
+    span: crate::diagnostics::SourceSpan,
+    ctx: &mut Ctx,
+) {
+    let Some(TypeRef::Generic {
+        base,
+        args: written,
+    }) = declared_type_of(owner, ctx)
+    else {
+        return;
+    };
+    let positions: &[usize] = match (simple_base(&base), method, args.len()) {
+        (
+            "Function" | "UnaryOperator" | "Consumer" | "Predicate",
+            "apply" | "accept" | "test",
+            1,
+        )
+        | ("ToIntFunction", "applyAsInt", 1)
+        | ("ToLongFunction", "applyAsLong", 1)
+        | ("ToDoubleFunction", "applyAsDouble", 1) => &[0],
+        ("BiFunction" | "BiConsumer" | "BiPredicate", "apply" | "accept" | "test", 2) => &[0, 1],
+        ("BinaryOperator", "apply", 2) | ("Comparator", "compare", 2) => &[0, 0],
+        _ => return,
+    };
+    // The method name has to be the interface's own for its kind.
+    let own = match simple_base(&base) {
+        "Function" | "UnaryOperator" | "BiFunction" | "BinaryOperator" => "apply",
+        "Consumer" | "BiConsumer" => "accept",
+        "Predicate" | "BiPredicate" => "test",
+        "Comparator" => "compare",
+        "ToIntFunction" => "applyAsInt",
+        "ToLongFunction" => "applyAsLong",
+        _ => "applyAsDouble",
+    };
+    if method != own {
+        return;
+    }
+    for (arg, at) in args.iter().zip(positions) {
+        let Some(wanted) = written.get(*at) else {
+            continue;
+        };
+        let TypeRef::Named(wanted_name) = wanted else {
+            continue;
+        };
+        let program_class = ctx.declared_classes.contains(wanted_name);
+        if concrete(wanted).is_none() && !program_class {
+            continue;
+        }
+        let actual = match arg {
+            Expr::Literal { value, .. } => match value {
+                crate::ast::Literal::Int(_) => Some(TypeRef::Int),
+                crate::ast::Literal::Long(_) => Some(TypeRef::Long),
+                crate::ast::Literal::Double(_) => Some(TypeRef::Double),
+                crate::ast::Literal::Float(_) => Some(TypeRef::Float),
+                crate::ast::Literal::Char(_) => Some(TypeRef::Char),
+                crate::ast::Literal::Bool(_) => Some(TypeRef::Boolean),
+                crate::ast::Literal::Str(_) => Some(TypeRef::Named(String::from("String"))),
+                crate::ast::Literal::Null => None,
+            },
+            _ => static_type_of(arg, ctx),
+        };
+        let (described, fits) = match actual {
+            Some(TypeRef::Int) => ("int".to_owned(), wanted_name == "Integer"),
+            Some(TypeRef::Long) => ("long".to_owned(), wanted_name == "Long"),
+            Some(TypeRef::Double) => ("double".to_owned(), wanted_name == "Double"),
+            Some(TypeRef::Float) => ("float".to_owned(), wanted_name == "Float"),
+            Some(TypeRef::Char) => ("char".to_owned(), wanted_name == "Character"),
+            Some(TypeRef::Boolean) => ("boolean".to_owned(), wanted_name == "Boolean"),
+            Some(TypeRef::Short) => ("short".to_owned(), wanted_name == "Short"),
+            Some(TypeRef::Byte) => ("byte".to_owned(), wanted_name == "Byte"),
+            Some(ref named @ TypeRef::Named(ref name)) if concrete(named).is_some() => {
+                (name.clone(), name == wanted_name)
+            }
+            Some(TypeRef::Named(ref name)) if ctx.declared_classes.contains(name) => (
+                name.clone(),
+                program_class && is_program_subtype(name, wanted_name, ctx),
+            ),
+            _ => continue,
+        };
+        if !fits {
+            ctx.diags.push(crate::diagnostics::Diagnostic::error(
+                ctx.path,
+                format!("incompatible types: {described} cannot be converted to {wanted_name}"),
+                arg.span(),
+            ));
+            let _ = span;
+            return;
+        }
     }
 }
 

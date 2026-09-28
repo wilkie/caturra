@@ -157,10 +157,12 @@ fn desugar_try_with_resources(
         let close_either_way = Stmt::If {
             cond: is_null(&primary, true),
             then: Box::new(Stmt::Block(vec![close_suppressing])),
+            // At the RESOURCE, as the checked call is: a refusal of the
+            // resource's type is then the first thing said about it.
             els: Some(Box::new(Stmt::Block(vec![close_call(
                 &resource.name,
                 false,
-                span,
+                resource.span,
             )]))),
             span,
         };
@@ -2647,7 +2649,7 @@ impl Parser<'_> {
             expr,
             Expr::Call { .. } | Expr::SuperMethodCall { .. } | Expr::NewObject { .. }
         ) {
-            self.error_at(expr.span(), "this expression is not a statement in Java");
+            self.error_at(expr.span(), "not a statement");
             return Err(Abort);
         }
         Ok(Stmt::Expr(expr))
@@ -6902,7 +6904,7 @@ mod tests {
         let array_new = parse_errors(&in_main("new int[3];"));
         assert_eq!(
             array_new.first().expect("new int[3];").message,
-            "this expression is not a statement in Java"
+            "not a statement"
         );
     }
 
