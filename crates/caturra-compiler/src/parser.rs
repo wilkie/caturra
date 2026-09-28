@@ -3326,11 +3326,29 @@ impl Parser<'_> {
     /// Whether the parenthesized header at the cursor contains a `:` at
     /// paren depth zero before any `;` (i.e. a for-each header). The
     /// cursor sits just past the opening `(`.
+    ///
+    /// A `:` that closes a CONDITIONAL is not one: `for (int i = even ? 2 : 1;
+    /// …)` was read as a for-each and refused with "expected ':' in the
+    /// for-each header". A `?` opens a conditional unless it is a wildcard,
+    /// which only ever follows `<` or `,` in a type argument list.
     fn header_contains_top_level_colon(&self) -> bool {
         let mut depth = 0usize;
         let mut offset = 0usize;
+        let mut open_conditionals = 0usize;
         while let Some(kind) = self.peek_at(offset) {
             match kind {
+                TokenKind::Symbol("?")
+                    if depth == 0
+                        && !matches!(
+                            offset.checked_sub(1).and_then(|at| self.peek_at(at)),
+                            Some(TokenKind::Symbol("<" | ","))
+                        ) =>
+                {
+                    open_conditionals += 1;
+                }
+                TokenKind::Symbol(":") if depth == 0 && open_conditionals > 0 => {
+                    open_conditionals -= 1;
+                }
                 TokenKind::Symbol("(") => depth += 1,
                 TokenKind::Symbol(")") => {
                     if depth == 0 {

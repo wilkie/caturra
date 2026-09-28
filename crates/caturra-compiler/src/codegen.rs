@@ -333,6 +333,7 @@ fn emit_clinit(
         receiver_location: None,
         void_target: None,
         last_call_inferred: false,
+        cond_when_true: None,
         lambda_pinned_return: None,
         in_lambda_result: false,
         call_witness: None,
@@ -12903,6 +12904,7 @@ fn emit_method(
         receiver_location: None,
         void_target: None,
         last_call_inferred: false,
+        cond_when_true: None,
         lambda_pinned_return: None,
         in_lambda_result: false,
         call_witness: None,
@@ -28675,6 +28677,11 @@ struct BodyGen<'a> {
     /// is the only place that can then take the type argument from the target
     /// instead of from the arguments (JLS 18.5.2).
     last_call_inferred: bool,
+    /// What a `&&` condition leaves assigned WHEN TRUE (JLS §16.1.2): the
+    /// right operand runs only then, so `while (i < n && (next = f(i)) > 0)`
+    /// assigns `next` for the loop body, though not for what follows it.
+    /// Set by `logical`, taken by the statement that branches on it.
+    cond_when_true: Option<Vec<Vec<bool>>>,
     /// The last emitted call's name and the type variable of its return, when
     /// that variable is pinned ONLY by implicitly typed lambdas — which JLS
     /// §18.5.2 fixes from the call's TARGET first (see `convert_value`).
@@ -30017,7 +30024,16 @@ impl BodyGen<'_> {
         }
         self.code.branch(op::GOTO, after, 0);
         let try_flags = self.assigned_flags();
-        let mut branch_flags = vec![try_flags];
+        // JLS §16.2.15: only a block that can COMPLETE NORMALLY reaches the
+        // statement after the `try`, so only those constrain what is assigned
+        // there. `try { x = parse(s); } catch (E e) { return -1; }` leaves `x`
+        // assigned — the catch leaves the method — and intersecting every
+        // catch regardless refused it ("might not have been initialized").
+        let mut branch_flags = if crate::flow::block_completes_normally(body) {
+            vec![try_flags]
+        } else {
+            Vec::new()
+        };
         // Catch-body ranges for the finally catch-all (an exception
         // thrown inside a catch must still run the finally; one thrown
         // inside a finally copy must not re-run it).
@@ -30082,7 +30098,9 @@ impl BodyGen<'_> {
                 }
             }
             self.code.branch(op::GOTO, after, 0);
-            branch_flags.push(self.assigned_flags());
+            if crate::flow::block_completes_normally(&clause.body) {
+                branch_flags.push(self.assigned_flags());
+            }
 
             // One entry per alternative per protected interval, all pointing
             // at this handler.
@@ -30473,12 +30491,17 @@ impl BodyGen<'_> {
     }
 
     fn if_statement(&mut self, cond: &Expr, then: &Stmt, els: Option<&Stmt>) {
+        self.cond_when_true = None;
         self.condition(cond, "if");
         let before = self.assigned_flags();
+        let when_true = self.take_when_true(cond);
         if let Some(els) = els {
             let else_label = self.code.new_label();
             let end = self.code.new_label();
             self.code.branch(op::IFEQ, else_label, 1);
+            if let Some(when_true) = &when_true {
+                self.restore_assigned(when_true);
+            }
             self.statement(then);
             let after_then = self.assigned_flags();
             self.restore_assigned(&before);
@@ -30516,6 +30539,9 @@ impl BodyGen<'_> {
         } else {
             let end = self.code.new_label();
             self.code.branch(op::IFEQ, end, 1);
+            if let Some(when_true) = &when_true {
+                self.restore_assigned(when_true);
+            }
             self.statement(then);
             // `if (true) x = 1;` always runs, so the assignment counts
             // (JLS §16.2.7 — "definitely assigned after e when false" is
@@ -30532,9 +30558,11 @@ impl BodyGen<'_> {
         let start = self.code.new_label();
         let end = self.code.new_label();
         self.code.bind(start);
+        self.cond_when_true = None;
         self.condition(cond, "while");
         self.code.branch(op::IFEQ, end, 1);
         let before = self.assigned_flags();
+        let when_true = self.take_when_true(cond);
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label: start,
@@ -30542,6 +30570,9 @@ impl BodyGen<'_> {
             label: self.pending_label.take(),
             break_flags: Vec::new(),
         });
+        if let Some(when_true) = &when_true {
+            self.restore_assigned(when_true);
+        }
         self.statement(body);
         let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.restore_assigned(&before);
@@ -30597,12 +30628,14 @@ impl BodyGen<'_> {
         let update_label = self.code.new_label();
         let end = self.code.new_label();
         self.code.bind(cond_label);
+        self.cond_when_true = None;
         if let Some(cond) = cond {
             self.code.mark_expr_line(cond);
             self.condition(cond, "for");
             self.code.branch(op::IFEQ, end, 1);
         }
         let before = self.assigned_flags();
+        let when_true = cond.and_then(|cond| self.take_when_true(cond));
         self.loop_stack.push(LoopLabels {
             break_label: end,
             continue_label: update_label,
@@ -30610,6 +30643,9 @@ impl BodyGen<'_> {
             label: self.pending_label.take(),
             break_flags: Vec::new(),
         });
+        if let Some(when_true) = &when_true {
+            self.restore_assigned(when_true);
+        }
         self.statement(body);
         let exits = self.loop_stack.pop().map(|entry| entry.break_flags);
         self.code.bind(update_label);
@@ -30634,6 +30670,19 @@ impl BodyGen<'_> {
     // loop bodies (which may run zero times) don't. This matches javac
     // on everything students write, minus constant-condition special
     // cases (`while (true)`), where we stay conservative.
+
+    /// The when-true state `condition` just left for `cond`, if it is a `&&`.
+    fn take_when_true(&mut self, cond: &Expr) -> Option<Vec<Vec<bool>>> {
+        let when_true = self.cond_when_true.take();
+        matches!(
+            cond,
+            Expr::Binary {
+                op: BinaryOp::And, ..
+            }
+        )
+        .then_some(when_true)
+        .flatten()
+    }
 
     fn assigned_flags(&self) -> Vec<Vec<bool>> {
         self.scopes
@@ -35561,6 +35610,23 @@ impl BodyGen<'_> {
                 let init_ref = intern_method_ref(self.pool, "java/util/ArrayList", "<init>", "()V");
                 self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
                 self.code.drop_stack(1);
+            }
+            // `new ArrayList<>(initialCapacity)`: an int is a capacity, not a
+            // copy source. Handed to the copy constructor, the VM saw a null
+            // collection and threw — every program that sized a list first
+            // (Rosetta Code has thirteen) died on its first line.
+            [capacity] if matches!(
+                self.type_of(capacity),
+                JType::Int | JType::Short | JType::Byte | JType::Char
+                    | JType::Boxed(ElemType::Int | ElemType::Short | ElemType::Byte | ElemType::Char)
+            ) =>
+            {
+                let actual = self.expr(capacity);
+                self.numeric_conversion(actual, JType::Int);
+                let init_ref =
+                    intern_method_ref(self.pool, "java/util/ArrayList", "<init>", "(I)V");
+                self.code.push_op_u16(op::INVOKESPECIAL, init_ref, 0);
+                self.code.drop_stack(2);
             }
             [source] => {
                 // Copy constructor `new ArrayList<>(collection)`: seed the
@@ -49861,9 +49927,20 @@ impl BodyGen<'_> {
         // `boolean r = true || (x = 1) > 0;` leaves `x` unassigned. Emitting
         // it left the flag set and let a later read of `x` compile.
         let before_rhs = self.assigned_flags();
+        self.cond_when_true = None;
         let rt = self.expr(rhs);
         let rt = self.unbox_wrapper(rt);
+        // When the whole `&&` is TRUE its right operand ran — and was true
+        // itself, so a nested `&&` there contributes its own when-true state.
+        let rhs_true = match rhs {
+            Expr::Binary {
+                op: BinaryOp::And, ..
+            } => self.cond_when_true.take(),
+            _ => None,
+        }
+        .unwrap_or_else(|| self.assigned_flags());
         self.restore_assigned(&before_rhs);
+        self.cond_when_true = (op == BinaryOp::And).then_some(rhs_true);
         if rt != JType::Boolean && rt != JType::Error && lt == JType::Boolean {
             self.error(
                 span,

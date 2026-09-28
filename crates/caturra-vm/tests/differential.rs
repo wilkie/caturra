@@ -67006,3 +67006,103 @@ public class LibraryStaticRefs {
 }
 "#
 );
+
+// Four things the Rosetta Code sweep turned up in ordinary programs:
+// `new ArrayList<>(capacity)` went to the COPY constructor with an int, so the
+// VM saw a null collection (thirteen programs died on their first line); a
+// `for` initializer holding a conditional was read as a for-each at its `:`;
+// a catch that cannot complete normally (`return`, `continue`, `throw`) was
+// still made to assign; and what a `&&` condition assigns WHEN TRUE did not
+// reach the branch it guards.
+differential_test!(
+    rosetta_ordinary_program_shapes,
+    "OrdinaryShapes",
+    r#"
+import java.util.*;
+
+public class OrdinaryShapes {
+    static int parse(String s) {
+        int x;
+        try { x = Integer.parseInt(s); } catch (NumberFormatException e) { return -1; }
+        return x;
+    }
+    static int sum(String[] ss) {
+        int total = 0;
+        for (String s : ss) {
+            int x;
+            try { x = Integer.parseInt(s); } catch (NumberFormatException e) { continue; }
+            total += x;
+        }
+        return total;
+    }
+    static int strict(String s) {
+        int x;
+        try { x = Integer.parseInt(s); } catch (NumberFormatException e) { throw new IllegalStateException(s); }
+        return x;
+    }
+    public static void main(String[] args) {
+        List<Integer> sized = new ArrayList<>(5);
+        ArrayList<Set<Integer>> rows = new ArrayList<Set<Integer>>(3);
+        int n = 2;
+        List<String> named = new ArrayList<>(n);
+        sized.add(1); rows.add(new HashSet<>(List.of(2))); named.add("x");
+        System.out.println(sized + " " + rows + " " + named);
+        try { new ArrayList<Integer>(-1); } catch (IllegalArgumentException e) { System.out.println(e.getMessage()); }
+        try { new PriorityQueue<Integer>(0); } catch (IllegalArgumentException e) { System.out.println("pq " + e.getMessage()); }
+
+        boolean even = true;
+        for (int i = even ? 2 : 1; i <= 6; i += 2) System.out.print(i + " ");
+        for (Map.Entry<?, ?> e : new TreeMap<>(Map.of("a", 1)).entrySet()) System.out.print(e + " ");
+        for (int x : even ? new int[]{7, 8} : new int[]{9}) System.out.print(x + " ");
+        System.out.println();
+
+        System.out.println(parse("4") + " " + parse("q") + " " + sum(new String[]{"1", "z", "2"}) + " " + strict("5"));
+        String t = "|ab|cd|";
+        int at = 0, next;
+        while (at < t.length() && (next = t.indexOf('|', at + 1)) > 0) {
+            System.out.print(t.substring(at + 1, next) + ";");
+            at = next;
+        }
+        int w;
+        if (t.length() > 2 && t != null && (w = t.length()) > 0) System.out.print(" " + w);
+        int u;
+        for (int i = 0; i < 1 && (u = i + 5) > 0; i++) System.out.print(" " + u);
+        System.out.println();
+    }
+}
+"#
+);
+
+// ...and what those rules must still refuse: a catch that COMPLETES leaves the
+// variable unassigned, as does a `||` (true without the right operand
+// running) and anything after a `&&` loop.
+differential_wording!(
+    reject_an_assignment_only_a_completing_catch_skips,
+    "RejectCatchSkips",
+    r#"
+public class RejectCatchSkips {
+    static int a(String s) {
+        int x;
+        try { x = Integer.parseInt(s); } catch (NumberFormatException e) { System.out.println("bad"); }
+        return x;
+    }
+    public static void main(String[] args) { }
+}
+"#
+);
+
+differential_error_count!(
+    reject_an_or_condition_and_a_loop_exit_assign_nothing,
+    "RejectWhenTrue",
+    r#"
+public class RejectWhenTrue {
+    public static void main(String[] args) {
+        int v;
+        if (args.length == 0 || (v = 7) > 0) System.out.print(v);
+        int w;
+        while (args.length > 5 && (w = 1) > 0) { }
+        System.out.print(w);
+    }
+}
+"#
+);

@@ -4153,6 +4153,21 @@ pub fn invoke_special(
             let JValue::Int(capacity) = args[0] else {
                 return Err(throw("java.lang.VerifyError: expected an int argument"));
             };
+            // `new ArrayList<>(initialCapacity)` — a hint nothing observes,
+            // but a negative one is refused in `ArrayList`'s own words.
+            if matches!(heap.get(receiver), Some(HeapObject::ArrayList(_))) {
+                if capacity < 0 {
+                    return Err(throw(format!(
+                        "java.lang.IllegalArgumentException: Illegal Capacity: {capacity}"
+                    )));
+                }
+                return Ok(());
+            }
+            // A `PriorityQueue` needs room for at least one element, and says
+            // nothing when it has none.
+            if capacity < 1 && matches!(heap.get(receiver), Some(HeapObject::PriorityQueue { .. })) {
+                return Err(throw("java.lang.IllegalArgumentException"));
+            }
             // A `ConcurrentHashMap` refuses a negative capacity with no words.
             if capacity < 0
                 && matches!(heap.get(receiver), Some(HeapObject::HashMap(map)) if map.is_concurrent())

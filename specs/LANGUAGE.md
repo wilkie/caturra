@@ -7534,6 +7534,35 @@ Pinned by `a_package_is_part_of_every_class_name` (compared through
 a packaged class's file after its simple name) and
 `a_method_reference_to_a_library_static`.
 
+### What ordinary Rosetta programs tripped on (2026-09-28)
+
+With packages and static imports in, the sweep stood at 796 of 1,072. The
+refusals and divergences left that were not library coverage fell into a few
+ordinary shapes:
+
+- **`new ArrayList<>(capacity)` threw `NullPointerException`**, and thirteen
+  programs died on their first line. The one-argument constructor always took
+  the COPY path, so the int was handed to `(Collection)` and the VM saw a null
+  collection. An integral argument is now a capacity; a negative one is
+  "Illegal Capacity: -1", and `new PriorityQueue<>(0)` is refused, both as a
+  JDK words them. No test had ever sized a list.
+- **A `for` initializer holding a conditional** — `for (int i = even ? 2 : 1;
+  …)` — was read as a for-each at the `:`. A `:` that closes a `?` no longer
+  counts; a wildcard `?`, which follows `<` or `,`, is not one.
+- **Definite assignment after `try`** intersected EVERY catch, so `try { x =
+  parse(s); } catch (E e) { return -1; }` left `x` unassigned. Only a block
+  that can complete normally reaches the statement after (JLS §16.2.15).
+- **Assigned when true** (JLS §16.1.2): the right operand of `&&` runs only
+  when the left is true, so `while (i < n && (next = find(i)) > 0)` assigns
+  `next` for the body. Rolling the operand's assignments back (right for what
+  follows) had also rolled them back for the branch it guards; a `&&` now
+  records its when-true state, through nested `&&`s, for `if`, `while` and
+  `for`.
+
+Pinned by `rosetta_ordinary_program_shapes`,
+`reject_an_assignment_only_a_completing_catch_skips` and
+`reject_an_or_condition_and_a_loop_exit_assign_nothing`.
+
 ### A chain is typed once per link (2026-09-28)
 
 A gate run reported one Code.org starter where "the compiler did not
