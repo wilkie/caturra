@@ -26806,6 +26806,74 @@ fn static_receiver_key(path: &[String]) -> String {
     }
 }
 
+/// Whether a LIBRARY class has a static method of this name — what an
+/// on-demand `import static java.util.Arrays.*;` brings into scope. The
+/// modelled tables answer for most classes; the ones codegen emits as
+/// intrinsics are listed by the JDK's own static members.
+pub(crate) fn library_static_method(class: &str, name: &str) -> bool {
+    if builtin_static_table(class).is_some_and(|(_, methods)| methods.iter().any(|m| m.name == name)) {
+        return true;
+    }
+    let listed: &[&str] = match class {
+        "Arrays" => &[
+            "asList", "binarySearch", "compare", "copyOf", "copyOfRange", "deepEquals",
+            "deepHashCode", "deepToString", "equals", "fill", "hashCode", "mismatch",
+            "parallelPrefix", "parallelSetAll", "parallelSort", "setAll", "sort", "spliterator",
+            "stream", "toString",
+        ],
+        "Collections" => &[
+            "addAll", "binarySearch", "copy", "disjoint", "emptyIterator", "emptyList",
+            "emptyMap", "emptySet", "fill", "frequency", "indexOfSubList", "lastIndexOfSubList",
+            "list", "max", "min", "nCopies", "replaceAll", "reverse", "reverseOrder", "rotate",
+            "shuffle", "singleton", "singletonList", "singletonMap", "sort", "swap",
+            "synchronizedList", "synchronizedMap", "unmodifiableCollection",
+            "unmodifiableList", "unmodifiableMap", "unmodifiableSet", "emptyNavigableMap",
+            "emptySortedSet", "checkedList", "enumeration",
+        ],
+        "List" | "Set" => &["of", "copyOf"],
+        "Map" => &["of", "copyOf", "entry", "ofEntries"],
+        "Objects" => &[
+            "checkIndex", "compare", "deepEquals", "equals", "hash", "hashCode", "isNull",
+            "nonNull", "requireNonNull", "requireNonNullElse", "requireNonNullElseGet",
+            "toString",
+        ],
+        "Function" | "UnaryOperator" => &["identity"],
+        "Optional" => &["of", "ofNullable", "empty"],
+        "Comparator" => &[
+            "comparing", "comparingInt", "comparingLong", "comparingDouble", "naturalOrder",
+            "reverseOrder", "nullsFirst", "nullsLast",
+        ],
+        "Stream" => &["of", "iterate", "generate", "concat", "empty", "ofNullable"],
+        "IntStream" | "LongStream" => &[
+            "range", "rangeClosed", "of", "iterate", "generate", "concat", "empty",
+        ],
+        "DoubleStream" => &["of", "iterate", "generate", "concat", "empty"],
+        "Collectors" => &[
+            "toList", "toSet", "toMap", "joining", "groupingBy", "partitioningBy", "counting",
+            "summingInt", "summingLong", "summingDouble", "averagingInt", "averagingLong",
+            "averagingDouble", "mapping", "filtering", "flatMapping", "minBy", "maxBy",
+            "reducing", "collectingAndThen", "toCollection", "toUnmodifiableList",
+            "toUnmodifiableSet", "toUnmodifiableMap", "summarizingInt", "summarizingLong",
+            "summarizingDouble",
+        ],
+        "System" => &[
+            "arraycopy", "currentTimeMillis", "nanoTime", "exit", "lineSeparator",
+            "getProperty", "identityHashCode", "getenv", "setOut", "setErr", "setIn", "gc",
+        ],
+        _ => &[],
+    };
+    listed.contains(&name)
+}
+
+/// Whether a LIBRARY class has a static field of this name (`Math.PI`,
+/// `System.out`, `BigInteger.ONE`), for an on-demand static import.
+pub(crate) fn library_static_field(class: &str, name: &str) -> bool {
+    builtin_static_constant(class, name).is_some()
+        || matches!((class, name), ("System", "out" | "err" | "in"))
+        || (matches!(class, "BigInteger" | "BigDecimal")
+            && matches!(name, "ZERO" | "ONE" | "TWO" | "TEN"))
+}
+
 fn builtin_static_table(class: &str) -> Option<(&'static str, &'static [BuiltinMethod])> {
     // A BUNDLED library reaches the wrapper statics through a name the program
     // cannot write. Its own `Integer.compare(a, b)` resolved to a class the
@@ -41078,6 +41146,23 @@ impl BodyGen<'_> {
             let owner = self.current_class_id;
             return Some(result.map(|ret| self.table.inherited_type_var(owner, method, ret)));
         }
+        // A nested class calls its enclosing class's STATIC methods unqualified,
+        // and a method in scope that way SHADOWS a static import of the same
+        // name (JLS §6.4.1) — so this is asked first.
+        // exactly as it names their static fields (JLS §15.12.1) — and up the
+        // whole nesting chain, not just one level. An enclosing *instance*
+        // method is not reachable: it would need an enclosing `this`, and javac
+        // rejects it too.
+        if !matches!(own, Resolution::Found(_)) {
+            for class in self.enclosing_chain() {
+                if matches!(
+                    self.table.resolve(&class, method, &arg_types),
+                    Resolution::Found(sig) if sig.is_static
+                ) {
+                    return self.static_call(&class, method, args, span);
+                }
+            }
+        }
         // Unqualified call to a `import static X.*` member (JUnit
         // `assertTrue(...)` → `Assertions.assertTrue(...)`).
         if !matches!(own, Resolution::Found(_)) {
@@ -41104,21 +41189,6 @@ impl BodyGen<'_> {
                     && pick_builtin(methods, method, &arg_types, TypeArgs::default(), self.table)
                         .is_some()
                 {
-                    return self.static_call(&class, method, args, span);
-                }
-            }
-        }
-        // A nested class calls its enclosing class's STATIC methods unqualified,
-        // exactly as it names their static fields (JLS §15.12.1) — and up the
-        // whole nesting chain, not just one level. An enclosing *instance*
-        // method is not reachable: it would need an enclosing `this`, and javac
-        // rejects it too.
-        if !matches!(own, Resolution::Found(_)) {
-            for class in self.enclosing_chain() {
-                if matches!(
-                    self.table.resolve(&class, method, &arg_types),
-                    Resolution::Found(sig) if sig.is_static
-                ) {
                     return self.static_call(&class, method, args, span);
                 }
             }

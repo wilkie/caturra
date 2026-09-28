@@ -7468,6 +7468,72 @@ Pinned by `the_runtime_failures_read_like_the_jdks`,
 `a_trace_names_the_programs_calls_not_the_bundled_librarys` and
 `stricter_a_null_literal_to_a_bounded_collections_method`.
 
+### A second corpus: Rosetta Code (2026-09-28)
+
+Every sweep of the Code.org corpus comes back clean, which says the sweeps can
+no longer tell us anything. `scripts/corpus/` fetches another corpus written
+by other people in other styles: every Java solution on Rosetta Code, 1,654
+programs from 1,597 tasks. Each is compiled with `javac --release 11` (anything
+needing later Java or a non-JDK library is out of scope) and run twice on a JDK
+(output that differs between runs is set aside), then run on caturra. The
+code is cached outside the repository and never committed.
+
+The first sweep: **761 of 1,149 in-scope programs agree**. About 120 of the
+refusals are honest (`java.awt`, `java.net`, XML, which a browser playground
+does not model). The rest are the backlog this corpus exists to produce.
+
+**Static imports of the JDK were the biggest cluster.** `import static
+java.util.Arrays.stream;`, `…System.out`, `…String.format`, `…BigInteger.ONE`,
+`…Collections.emptyList`, `…List.of`, `…Function.identity`,
+`…Objects.requireNonNull`, `…Comparator.comparing`, `…Arrays.*`: seventy
+programs use one, and caturra answered only the few that codegen's fallback
+reached (`Math.*`, some `Collectors`). The lambda pass, which types every
+stream, collector and comparator, reached none, hence "a lambda … is only
+allowed where a functional-interface type is expected". A new pass
+(`static_imports.rs`) runs before all the others and writes each use in its
+QUALIFIED form, which every later pass already understands:
+- a bare call `m(…)` becomes `X.m(…)`;
+- a bare name (`out`, `PI`, `ONE`, including the qualifier of `out::println`)
+  becomes `X.NAME`;
+- an on-demand import is resolved by asking the library which class declares
+  the member.
+
+Per JLS §6.4.1, a member in scope shadows the import: a method of the class,
+its superclasses or enclosing classes, or a local, parameter or field of the
+name. Codegen's own fallback asked the static imports BEFORE the enclosing
+classes, so a nested class calling its outer class's `max` got `Math.max`; it
+now asks in JLS order. The sweep after: 776 agree.
+
+Pinned by `a_static_import_of_the_jdk_in_every_form`.
+
+**`package` declarations were refused** ("classes share one namespace"), and
+25 programs start with one. Just accepting the line would already make 16 of
+them agree, but the package is observable, so it is carried faithfully: it
+becomes part of each class's BINARY name (`demo/app/Main`), while the simple
+name every pass matches on is unchanged. Anonymous and local classes take it
+from their outer class. The VM already writes a binary name with dots, so
+`getClass().getName()`, a default `toString()` and the `Class: message` header
+say `demo.app.Main`. A few places read the raw internal name and now convert
+it: a trace frame, a lambda's frame, and the check that hides an exception's
+own constructor frames. The main class is found by its simple name when only
+one class answers to it, and `Class.forName("demo.app.Main")` finds it by
+the dotted name. A package line anywhere but first is javac's "class,
+interface, enum, or record expected". The compatibility page records it as
+supported.
+
+**Method references to library statics.** `reduce(1, Math::multiplyExact)`
+and `IntStream…reduce(0, Math::max)` read the reference as an unbound
+INSTANCE method of the element ("int cannot be dereferenced"): `Math` and
+`StrictMath` are now namespaces (every method static), and so is every
+`Character` method except `charValue` and `compareTo`, where only eleven
+were listed. `Arrays.parallelPrefix` accepted a lambda but not a method
+reference.
+
+Pinned by `a_package_is_part_of_every_class_name` (compared through
+`differential_test_trace!`; the harness now compiles with `-d .` and names
+a packaged class's file after its simple name) and
+`a_method_reference_to_a_library_static`.
+
 ### A chain is typed once per link (2026-09-28)
 
 A gate run reported one Code.org starter where "the compiler did not

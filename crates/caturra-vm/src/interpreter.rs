@@ -575,8 +575,10 @@ impl<'run> Interpreter<'run> {
         let format_line = |class: &str, method: &str, file: &str, line: Option<u16>| {
             let head = match self.trace_names.get(class) {
                 Some(name) if name.is_empty() => return None,
-                Some(name) => name.clone(),
-                None => format!("{class}.{method}"),
+                Some(name) => name.replace('/', "."),
+                // A class in a package is `demo/app/Main` inside; a frame
+                // names it `demo.app.Main`, as every other report does.
+                None => format!("{}.{method}", class.replace('/', ".")),
             };
             Some(match line {
                 Some(line) => format!("{head}({file}:{line})"),
@@ -654,9 +656,10 @@ impl<'run> Interpreter<'run> {
         let lines = self.stack_frame_lines();
         let mut skip = 0usize;
         for line in &lines {
+            // The frame names the class DOTTED; the class table, slashed.
             let is_throwable_init = line
                 .split_once(".<init>(")
-                .is_some_and(|(class, _)| self.instance_is_throwable(class));
+                .is_some_and(|(class, _)| self.instance_is_throwable(&class.replace('.', "/")));
             if is_throwable_init {
                 skip += 1;
             } else {
@@ -3173,11 +3176,13 @@ impl<'run> Interpreter<'run> {
                         let class_name = suspended.class.class_name().unwrap_or("<unknown>");
                         match suspended.current_line {
                             Some(line) => format!(
-                                "{class_name}.{}({}:{line})",
+                                "{}.{}({}:{line})",
+                                class_name.replace('/', "."),
                                 suspended.method_name, suspended.code.source_file
                             ),
                             None => format!(
-                                "{class_name}.{}({})",
+                                "{}.{}({})",
+                                class_name.replace('/', "."),
                                 suspended.method_name, suspended.code.source_file
                             ),
                         }
@@ -15629,9 +15634,11 @@ impl<'run> Interpreter<'run> {
                 } else {
                     message
                 };
+                // `getClass().getName()`: dotted for a class in a package.
+                let shown = instance_class.replace('/', ".");
                 let text = match message {
-                    Some(message) => format!("{instance_class}: {message}"),
-                    None => instance_class.to_owned(),
+                    Some(message) => format!("{shown}: {message}"),
+                    None => shown,
                 };
                 let reference = self.heap.alloc_string(&text);
                 return Ok(UserDispatch::Value(Some(JValue::Ref(Some(reference)))));
@@ -16358,6 +16365,16 @@ impl<'run> Interpreter<'run> {
                 Some(JValue::Ref(Some(reference))) => self.heap.string_display(*reference),
                 _ => None,
             };
+            // A class in a PACKAGE is named with dots, as a JDK takes it,
+            // and loaded under its internal slashed name.
+            let name = name.map(|name| {
+                let internal = name.replace('.', "/");
+                if name.contains('.') && self.classes.contains_key(&internal) {
+                    internal
+                } else {
+                    name
+                }
+            });
             let value = match name {
                 Some(name) if self.classes.contains_key(&name) => {
                     let reference = self.intern_class(name);

@@ -37,7 +37,8 @@ def jdk(source, main):
     not exist yet."""
     work = tempfile.mkdtemp(prefix="compat-")
     try:
-        path = os.path.join(work, f"{main}.java")
+        # A class in a package (`demo.G`) is still written to `G.java`.
+        path = os.path.join(work, f"{main.rsplit('.', 1)[-1]}.java")
         open(path, "w").write(source)
         compiled = subprocess.run(
             ["javac", "-nowarn", "-d", work, path],
@@ -66,7 +67,8 @@ def caturra(source, main):
     """(ok, output_or_error) from the engine itself."""
     work = tempfile.mkdtemp(prefix="compat-")
     try:
-        path = os.path.join(work, f"{main}.java")
+        # A class in a package (`demo.G`) is still written to `G.java`.
+        path = os.path.join(work, f"{main.rsplit('.', 1)[-1]}.java")
         open(path, "w").write(source)
         ran = subprocess.run(
             [COMPATRUN, path, main],

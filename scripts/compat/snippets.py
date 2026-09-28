@@ -2708,9 +2708,9 @@ GRAMMAR = [
          source=_prog('System.out.println(twice(2));',
                       '    static int twice(final int v) { return v * 2; }')),
     dict(id="g-package", category="Declarations", title="package declaration",
-         summary="caturra puts every class in one namespace.", main="G",
+         summary="`package demo;` — the class is `demo.G`, which its name, a default `toString()` and a trace frame report.", main="demo.G",
          source='package demo;\n\npublic class G {\n    public static void main(String[] args) {\n'
-                '        System.out.println("packaged");\n    }\n}\n'),
+                '        System.out.println(new G().getClass().getName());\n    }\n}\n'),
     dict(id="g-static-import", category="Declarations", title="Static import of a library member",
          summary="`import static java.lang.Math.max;` (a static import of a USER class works — this is the library one).",
          main="G",

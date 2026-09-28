@@ -19,6 +19,7 @@ mod lambda;
 pub mod lexer;
 mod mock;
 pub mod parser;
+mod static_imports;
 mod thrown;
 
 use std::collections::HashMap;
@@ -642,7 +643,7 @@ fn number_defaults(units: &mut [(String, ast::CompilationUnit)]) {
 #[must_use]
 #[allow(clippy::too_many_lines)] // the bundle-injection pipeline
 pub fn compile(sources: &[SourceFile]) -> Compilation {
-    crate::ast::clear_program_functional_results();
+    ast::clear_program_functional_results();
     let mut compilation = Compilation::default();
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut units = Vec::new();
@@ -1100,6 +1101,7 @@ pub fn compile(sources: &[SourceFile]) -> Compilation {
         imports::check_unit(path, unit, &user_classes, &mut compilation.diagnostics);
     }
 
+    static_imports::qualify_static_imports(&mut units);
     number_defaults(&mut units);
     bridges::add_bridge_methods(&mut units);
     inner::bind_inner_classes(&mut units);

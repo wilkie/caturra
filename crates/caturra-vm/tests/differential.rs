@@ -47,7 +47,7 @@ fn javac_rejects(class_name: &str, source: &str) -> bool {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("reject-{class_name}-{fingerprint:x}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let java_file = dir.join(format!("{class_name}.java"));
+    let java_file = dir.join(format!("{}.java", source_file_stem(class_name)));
     std::fs::write(&java_file, source).expect("write source");
     let compile = Command::new("javac")
         .arg(java_file.file_name().expect("file name"))
@@ -66,7 +66,7 @@ fn javac_first_error(class_name: &str, source: &str) -> Option<String> {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("wording-{class_name}-{fingerprint:x}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let java_file = dir.join(format!("{class_name}.java"));
+    let java_file = dir.join(format!("{}.java", source_file_stem(class_name)));
     std::fs::write(&java_file, source).expect("write source");
     let compile = javac_in(&dir, &java_file);
     if compile.status.success() {
@@ -91,7 +91,7 @@ fn javac_first_error_line(class_name: &str, source: &str) -> Option<u32> {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("line-{class_name}-{fingerprint:x}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let java_file = dir.join(format!("{class_name}.java"));
+    let java_file = dir.join(format!("{}.java", source_file_stem(class_name)));
     std::fs::write(&java_file, source).expect("write source");
     let compile = javac_in(&dir, &java_file);
     String::from_utf8_lossy(&compile.stderr)
@@ -109,7 +109,7 @@ fn javac_first_error_line(class_name: &str, source: &str) -> Option<u32> {
 
 fn caturra_first_error_line(class_name: &str, source: &str) -> Option<u32> {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-        path: format!("{class_name}.java"),
+        path: format!("{}.java", source_file_stem(class_name)),
         text: source.to_owned(),
     }]);
     compilation
@@ -122,7 +122,7 @@ fn caturra_first_error_line(class_name: &str, source: &str) -> Option<u32> {
 /// caturra's first diagnostic. `None` when caturra accepts the program.
 fn caturra_first_error(class_name: &str, source: &str) -> Option<String> {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-        path: format!("{class_name}.java"),
+        path: format!("{}.java", source_file_stem(class_name)),
         text: source.to_owned(),
     }]);
     compilation
@@ -139,7 +139,7 @@ fn javac_error_count(class_name: &str, source: &str) -> usize {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("count-{class_name}-{fingerprint:x}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let java_file = dir.join(format!("{class_name}.java"));
+    let java_file = dir.join(format!("{}.java", source_file_stem(class_name)));
     std::fs::write(&java_file, source).expect("write source");
     let compile = javac_in(&dir, &java_file);
     if compile.status.success() {
@@ -154,7 +154,7 @@ fn javac_error_count(class_name: &str, source: &str) -> usize {
 /// How many errors caturra reports for `source`.
 fn caturra_error_count(class_name: &str, source: &str) -> usize {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-        path: format!("{class_name}.java"),
+        path: format!("{}.java", source_file_stem(class_name)),
         text: source.to_owned(),
     }]);
     compilation
@@ -177,7 +177,7 @@ fn assert_both_reject(class_name: &str, source: &str) {
          strictness rather than a shared rule — do not assert it here"
     );
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-        path: format!("{class_name}.java"),
+        path: format!("{}.java", source_file_stem(class_name)),
         text: source.to_owned(),
     }]);
     assert!(
@@ -199,7 +199,10 @@ fn assert_both_reject(class_name: &str, source: &str) {
 /// `file:line: error:` line, so its absence is the signal to try again.
 fn javac_in(dir: &std::path::Path, java_file: &std::path::Path) -> std::process::Output {
     let run = || {
+        // `-d .`: a class in a PACKAGE goes to `demo/app/`, where `java
+        // demo.app.Main` looks; one in no package stays beside its source.
         Command::new("javac")
+            .args(["-d", "."])
             .arg(java_file.file_name().expect("file name"))
             .current_dir(dir)
             .output()
@@ -229,6 +232,12 @@ fn run_with_jdk_files(
 }
 
 /// A JDK run's standard output AND standard error.
+/// The file a class is written to: a class in a PACKAGE (`demo.app.Main`)
+/// still lives in `Main.java`, and is run by its qualified name.
+fn source_file_stem(class_name: &str) -> &str {
+    class_name.rsplit('.').next().unwrap_or(class_name)
+}
+
 fn run_with_jdk_both(
     class_name: &str,
     source: &str,
@@ -243,7 +252,7 @@ fn run_with_jdk_both(
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("differential-{class_name}-{fingerprint:x}"));
     std::fs::create_dir_all(&dir).expect("create temp dir");
-    let java_file = dir.join(format!("{class_name}.java"));
+    let java_file = dir.join(format!("{}.java", source_file_stem(class_name)));
     let mut file = std::fs::File::create(&java_file).expect("create source file");
     file.write_all(source.as_bytes()).expect("write source");
     drop(file);
@@ -344,7 +353,7 @@ fn run_with_caturra_both(
     // at least two of them. javac finds them itself (they sit beside the main
     // one on its sourcepath); caturra is handed them.
     let mut sources = vec![caturra_compiler::SourceFile {
-        path: format!("{class_name}.java"),
+        path: format!("{}.java", source_file_stem(class_name)),
         text: source.to_owned(),
     }];
     let is_source = |name: &str| {
@@ -670,7 +679,7 @@ macro_rules! refused_at_run {
 /// The message caturra's VM refused a program with, or `None` if it ran.
 fn caturra_run_failure(class_name: &str, source: &str) -> Option<String> {
     let sources = vec![caturra_compiler::SourceFile {
-        path: format!("{class_name}.java"),
+        path: format!("{}.java", source_file_stem(class_name)),
         text: source.to_owned(),
     }];
     let compilation = caturra_compiler::compile(&sources);
@@ -66869,6 +66878,130 @@ public class LongChains {
         System.out.println(nested);
         int deep = List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(7)))))))))))))).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0);
         System.out.println(deep);
+    }
+}
+"#
+);
+
+// A static import of the JDK in every form a corpus program writes — single
+// member and on-demand, of methods and of constants, as a call, a receiver and
+// a method-reference qualifier — and the member in scope that SHADOWS one
+// (JLS §6.4.1): a method of an enclosing class, a local of the same name.
+differential_test!(
+    a_static_import_of_the_jdk_in_every_form,
+    "StaticImports",
+    r#"
+import java.math.BigInteger;
+import java.util.*;
+import java.util.stream.*;
+import static java.lang.Math.*;
+import static java.lang.System.out;
+import static java.lang.String.format;
+import static java.math.BigInteger.ONE;
+import static java.util.Arrays.*;
+import static java.util.Collections.emptyList;
+import static java.util.Comparator.comparing;
+import static java.util.Objects.requireNonNull;
+import static java.util.function.Function.identity;
+import static java.util.stream.Collectors.*;
+import static java.util.stream.IntStream.rangeClosed;
+
+public class StaticImports {
+    static int max(int a, int b) { return -1; }
+    static class Inner {
+        int run() { return max(3, 4) + abs(-2); }
+    }
+    public static void main(String[] args) {
+        out.println(max(1, 2) + " " + min(1, 2) + " " + new Inner().run() + " " + sqrt(16) + " " + PI);
+        String E = "local E";
+        out.println(E + " " + format("%03d", 7) + " " + ONE.add(ONE));
+        int[] xs = {3, 1, 2};
+        sort(xs);
+        out.println(Arrays.toString(xs) + " " + stream(xs).map(x -> x * 2).sum() + " " + asList(4, 5));
+        out.println(emptyList().size() + " " + requireNonNull("q") + " " + rangeClosed(1, 4).sum());
+        List<String> words = Stream.of("pear", "fig", "apple").sorted(comparing(String::length)).collect(toList());
+        out.println(words + " " + words.stream().map(identity()).collect(joining("|")));
+        out.println(Stream.of(1, 2, 3, 4).collect(groupingBy(x -> x % 2, counting())));
+        words.forEach(out::println);
+    }
+}
+"#
+);
+
+// A `package` line was refused outright ("classes share one namespace"), and a
+// Rosetta Code sweep found 25 programs that began with one. The package is
+// now part of each class's BINARY name — the simple name every pass matches
+// is unchanged — so the name, a default `toString()`, a trace frame, a user
+// exception's header, a lambda's frame and `Class.forName` all say
+// `demo.app.Main`, as a JDK's do.
+differential_test_trace!(
+    a_package_is_part_of_every_class_name,
+    "demo.app.Packaged",
+    r#"
+package demo.app;
+
+import java.util.*;
+
+public class Packaged {
+    static class Inner { }
+    static class Oops extends RuntimeException { Oops(String m) { super(m); } }
+    enum Kind { A, B }
+    public static void main(String[] args) throws Exception {
+        class Local { }
+        System.out.println(new Packaged().getClass().getName() + " " + Packaged.class.getSimpleName());
+        System.out.println(Inner.class.getName() + " " + Kind.B.getDeclaringClass().getName());
+        System.out.println(new Local().getClass().getName() + " " + Packaged.class.getPackageName());
+        String shown = new Inner().toString();
+        System.out.println(shown.substring(0, shown.indexOf('@')));
+        Runnable r = new Runnable() { public void run() { System.out.println(getClass().getName()); } };
+        r.run();
+        System.out.println(Class.forName("demo.app.Packaged").getSimpleName());
+        try {
+            List.of(1, 2).forEach(x -> { if (x == 2) throw new Oops("in lambda"); });
+        } catch (Oops e) {
+            e.printStackTrace();
+        }
+        System.out.println(new Oops("shown"));
+    }
+}
+"#
+);
+
+// A method reference to a `Math` static in a TWO-argument position read as an
+// unbound instance method of the element ("int cannot be dereferenced"), every
+// `Character` static beyond eleven common ones did the same, and
+// `Arrays.parallelPrefix` took a lambda but not a method reference.
+differential_test!(
+    a_method_reference_to_a_library_static,
+    "LibraryStaticRefs",
+    r#"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class LibraryStaticRefs {
+    static String keep(Predicate<Character> p, String s) {
+        StringBuilder b = new StringBuilder();
+        for (char c : s.toCharArray()) if (p.test(c)) b.append(c);
+        return b.toString();
+    }
+    public static void main(String[] args) {
+        int product = List.of(2, 3, 5).stream().reduce(1, Math::multiplyExact);
+        System.out.println(product + " " + IntStream.of(4, 5).reduce(1, Math::multiplyExact)
+            + " " + IntStream.of(4, 9, 2).reduce(0, Math::max) + " " + Stream.of(3, 8).reduce(Integer::max).get());
+        BinaryOperator<Integer> mx = Math::max;
+        UnaryOperator<Double> floor = Math::floor;
+        DoubleUnaryOperator ceil = Math::ceil;
+        System.out.println(mx.apply(3, 9) + " " + floor.apply(2.5) + " " + ceil.applyAsDouble(2.5));
+        List<Function<Double, Double>> fs = List.of(Math::sin, Math::sqrt, Math::abs);
+        for (Function<Double, Double> f : fs) System.out.println(f.apply(0.0));
+        System.out.println(keep(Character::isJavaIdentifierStart, "$1_x") + keep(Character::isTitleCase, "aB")
+            + keep(Character::isLetter, "a1b2"));
+        int[] a = {1, 2, 3, 4};
+        Arrays.parallelPrefix(a, Integer::sum);
+        long[] b = {2, 3, 4};
+        Arrays.parallelPrefix(b, Math::multiplyExact);
+        System.out.println(Arrays.toString(a) + " " + Arrays.toString(b));
     }
 }
 "#

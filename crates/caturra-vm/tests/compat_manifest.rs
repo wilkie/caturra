@@ -52,7 +52,7 @@ fn real_java(source: &str, main: &str) -> (bool, String) {
     let dir = std::env::temp_dir().join(format!("caturra-compat-{main}"));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("temp dir");
-    let file = dir.join(format!("{main}.java"));
+    let file = dir.join(format!("{}.java", main.rsplit('.').next().unwrap_or(main)));
     std::fs::write(&file, source).expect("write source");
 
     let compiled = Command::new("javac")
@@ -79,7 +79,7 @@ fn real_java(source: &str, main: &str) -> (bool, String) {
 /// `Ok(stdout)` if caturra compiles and runs it, `Err(first error)` if not.
 fn caturra(source: &str, main: &str) -> Result<String, String> {
     let compilation = caturra_compiler::compile(&[caturra_compiler::SourceFile {
-        path: format!("{main}.java"),
+        path: format!("{}.java", main.rsplit('.').next().unwrap_or(main)),
         text: source.to_owned(),
     }]);
     if !compilation.success() {

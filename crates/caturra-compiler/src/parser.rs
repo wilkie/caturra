@@ -720,6 +720,7 @@ impl Parser<'_> {
     fn compilation_unit(&mut self) -> CompilationUnit {
         let mut imports = Vec::new();
         let mut classes = Vec::new();
+        let mut package: Option<Vec<String>> = None;
         while let Some(kind) = self.peek() {
             match kind {
                 TokenKind::Keyword(Keyword::Import) => {
@@ -729,13 +730,31 @@ impl Parser<'_> {
                         self.recover_to_statement_boundary();
                     }
                 }
+                // `package a.b;` — first in the file, as javac demands. Its
+                // classes keep their SIMPLE names for every pass here (one
+                // program shares one namespace); the package goes into their
+                // BINARY names, which is what `getClass().getName()`, a default
+                // `toString()` and a stack-trace frame report.
+                TokenKind::Keyword(Keyword::Package) if package.is_none() && imports.is_empty() && classes.is_empty() => {
+                    self.pos += 1;
+                    let mut path = Vec::new();
+                    loop {
+                        let Ok((segment, _)) = self.expect_ident("in the package name") else {
+                            break;
+                        };
+                        path.push(segment);
+                        if !self.eat_symbol(".") {
+                            break;
+                        }
+                    }
+                    if self.expect_symbol(";", "after the package name").is_err() {
+                        self.recover_to_statement_boundary();
+                    }
+                    package = Some(path);
+                }
                 TokenKind::Keyword(Keyword::Package) => {
                     let span = self.here();
-                    self.error_at(
-                        span,
-                        "package declarations are not supported by caturra; classes share one \
-                         namespace",
-                    );
+                    self.error_at(span, "class, interface, enum, or record expected");
                     self.recover_to_statement_boundary();
                 }
                 _ => {
@@ -785,6 +804,15 @@ impl Parser<'_> {
             }
         }
         classes.extend(synthesized);
+        if let Some(package) = package.filter(|p| !p.is_empty()) {
+            let prefix = package.join("/");
+            // An anonymous or local class is named later, AFTER its outer
+            // class (`demo/app/Main$1`), so it takes the package from there.
+            for class in classes.iter_mut().filter(|c| !c.is_anonymous && !c.is_local) {
+                let binary = class.binary_name.take().unwrap_or_else(|| class.name.clone());
+                class.binary_name = Some(format!("{prefix}/{binary}"));
+            }
+        }
         crate::ast::keep_unit_functional_results();
         crate::ast::set_unit_functional_results(std::collections::HashMap::new());
         CompilationUnit { imports, classes }
@@ -7465,12 +7493,18 @@ mod tests {
     }
 
     #[test]
-    fn imports_are_ignored_and_packages_rejected() {
+    fn imports_are_ignored_and_packages_name_the_classes() {
         let unit = parse_ok("import java.util.Scanner;\nimport java.util.ArrayList;\nclass A { }");
         assert_eq!(unit.classes.len(), 1);
 
-        let errors = parse_errors("package com.example;\nclass A { }");
+        // A package is part of each class's BINARY name; the simple name
+        // every pass matches on is unchanged.
+        let unit = parse_ok("package com.example;\nclass A { }");
+        assert_eq!(unit.classes[0].name, "A");
+        assert_eq!(unit.classes[0].binary_name.as_deref(), Some("com/example/A"));
+
+        // ...and only FIRST in the file, as javac demands.
+        let errors = parse_errors("class A { }\npackage com.example;");
         assert_eq!(errors.len(), 1);
-        assert!(errors[0].message.contains("package"));
     }
 }

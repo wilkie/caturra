@@ -1039,6 +1039,13 @@ fn class_name_set(units: &[(String, CompilationUnit)]) -> std::collections::Hash
 /// (a curated set; used only for method-reference disambiguation).
 #[allow(clippy::too_many_lines)] // one arm per class whose statics are named
 fn is_library_static(class: &str, method: &str) -> bool {
+    // `Math` and `StrictMath` are namespaces: every method is static. Asked
+    // by name alone, `reduce(1, Math::multiplyExact)` read as an unbound
+    // INSTANCE reference on the element ("cannot find symbol … location:
+    // class Integer"), and `IntStream…reduce(0, Math::max)` as `int`'s.
+    if matches!(class, "Math" | "StrictMath") {
+        return true;
+    }
     // The statics of the classes a method REFERENCE is written on. Judged by
     // NAME alone below, which is why `Arrays::stream` — the ordinary way to
     // flatten a grid — read as an instance call on a row and was "cannot find
@@ -1087,20 +1094,10 @@ fn is_library_static(class: &str, method: &str) -> bool {
         // is. Written as lists, each read as an unbound INSTANCE reference on
         // the stream's element.
         "Arrays" | "Collections" | "Objects" | "Collectors" | "Files" => true,
-        "Character" => matches!(
-            method,
-            "isDigit"
-                | "isLetter"
-                | "isLetterOrDigit"
-                | "isUpperCase"
-                | "isLowerCase"
-                | "isWhitespace"
-                | "isSpaceChar"
-                | "isAlphabetic"
-                | "toUpperCase"
-                | "toLowerCase"
-                | "getNumericValue"
-        ),
+        // Every `Character` method but these two has a STATIC form
+        // (`isJavaIdentifierStart`, `isTitleCase`, `digit`, …); a list of the
+        // common ones made the rest read as unbound instance references.
+        "Character" => !matches!(method, "charValue" | "compareTo"),
         "String" => matches!(method, "join" | "format" | "copyValueOf"),
         "Integer" | "Long" | "Short" | "Byte" => matches!(
             method,
@@ -4188,7 +4185,12 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                 && receiver
                     .as_deref()
                     .is_some_and(|r| names_library_class(r, "Arrays"))
-                && matches!(args.last(), Some(Expr::Lambda { params, .. }) if params.len() == 2)
+                // A two-parameter lambda, or a METHOD REFERENCE (`Integer::sum`,
+                // `Math::max`), which reached codegen undesugared and was
+                // "only allowed where a functional-interface type is expected".
+                && matches!(args.last(),
+                    Some(Expr::Lambda { params, .. }) if params.len() == 2)
+                    | matches!(args.last(), Some(Expr::MethodRef { .. }))
                 && let Some(elem) = array_elem_type(&args[0], ctx)
             {
                 let last = args.len() - 1;
@@ -4196,6 +4198,14 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
                     desugar_expr(arg, None, ctx);
                 }
                 let object = TypeRef::Named(String::from("Object"));
+                if matches!(&args[last], Expr::MethodRef { .. }) {
+                    let synth = Sam {
+                        method: String::from("apply"),
+                        params: vec![elem.clone(), elem.clone()],
+                        ret: elem.clone(),
+                    };
+                    args[last] = method_ref_to_lambda(&args[last], &synth, ctx);
+                }
                 args[last] = build_erased_lambda(
                     &mut args[last],
                     "__BiFunction",

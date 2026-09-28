@@ -198,6 +198,22 @@ impl<'host> Vm<'host> {
         // Watch classes compiled during pauses live here so paused-time
         // frames can borrow them for the rest of the run.
         let watch_arena = typed_arena::Arena::new();
+        // A class in a PACKAGE is `demo/app/Main`: it is run by that name, by
+        // the dotted `demo.app.Main` a JDK takes, or by its simple name when
+        // exactly one loaded class answers to it (a playground and the CLI
+        // know the file's class, not its package).
+        let internal = class_name.replace('.', "/");
+        let resolved = if self.classes.contains_key(&internal) {
+            internal
+        } else {
+            let suffix = format!("/{internal}");
+            let mut matching = self.classes.keys().filter(|name| name.ends_with(&suffix));
+            match (matching.next(), matching.next()) {
+                (Some(only), None) => only.clone(),
+                _ => class_name.to_owned(),
+            }
+        };
+        let class_name = resolved.as_str();
         let class = self
             .classes
             .get(class_name)
