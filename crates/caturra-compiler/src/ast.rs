@@ -83,6 +83,11 @@ pub struct ClassDecl {
     /// ordinary `extends`/`implements` resolution rather than the anonymous
     /// single-supertype form.
     pub is_local: bool,
+    /// For a LOCAL class, where its declaration stood in the method body —
+    /// the span of the `Stmt::Empty` the parser leaves there. Its captures
+    /// are the locals in scope at that point, found even when nothing in the
+    /// method ever instantiates it.
+    pub declared_at: Option<SourceSpan>,
     /// Set for a non-static nested class (an inner class), bound to an enclosing
     /// instance. A pass gives it a synthetic enclosing reference and threads
     /// that instance through its constructors and its `new` sites.

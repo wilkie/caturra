@@ -604,13 +604,40 @@ fn thrown_of_expr(expr: &Expr, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> T
             out.absorb(ctor_throws(class, args, *span, handlers, ctx));
             out
         }
-        Expr::SuperMethodCall { args, .. } => {
+        Expr::SuperMethodCall {
+            owner,
+            method,
+            args,
+            span,
+        } => {
             let mut out = ThrownSet::default();
             for a in args {
                 out.absorb(thrown_of_expr(a, handlers, ctx));
             }
-            // A super.m() call: the superclass method's clause.
-            out.unknown = true;
+            // A super.m() call: the superclass method's clause — the named
+            // interface's for `Iface.super.m()`, `Object`'s for a class that
+            // extends nothing (`super.clone()` declares
+            // CloneNotSupportedException). A LIBRARY superclass has no table
+            // entry to read, so it stays unknown.
+            let parent = match (owner, ctx.class.superclass.as_deref()) {
+                (Some(interface), _) => Some(interface.clone()),
+                (None, None) => Some(String::from("java/lang/Object")),
+                (None, Some(parent)) if ctx.table.has_class(parent) => Some(parent.to_owned()),
+                (None, Some(_)) => None,
+            };
+            match parent {
+                Some(parent) => {
+                    out.absorb(callee_throws_named(
+                        &parent,
+                        method,
+                        args.len(),
+                        *span,
+                        handlers,
+                        ctx,
+                    ));
+                }
+                None => out.unknown = true,
+            }
             out
         }
         Expr::Binary { lhs, rhs, .. } => {

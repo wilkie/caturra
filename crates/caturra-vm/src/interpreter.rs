@@ -3971,6 +3971,30 @@ impl<'run> Interpreter<'run> {
         // "unknown native member". These ARE the Object defaults, and
         // `user_virtual_dispatch` already knows them — reached with the
         // receiver's own class so `toString`'s hash is the object's.
+        // ...and `super.clone()`, the copy idiom every `Cloneable` class
+        // writes: `Object.clone`'s own field-by-field copy, refused with a
+        // CloneNotSupportedException for a class that is not `Cloneable`.
+        if target_class == "java/lang/Object"
+            && method_name == "clone"
+            && descriptor == "()Ljava/lang/Object;"
+            && let Some(crate::value::HeapObject::Instance { class_name, .. }) =
+                self.heap.get(receiver)
+        {
+            let class_name = class_name.clone();
+            self.recycle_vec(args);
+            if !self.class_implements(&class_name, "Cloneable") {
+                return Err(VmError::UncaughtException(format!(
+                    "java.lang.CloneNotSupportedException: {}",
+                    class_name.replace('/', ".")
+                )));
+            }
+            let copy = self.heap.get(receiver).cloned().ok_or_else(|| {
+                VmError::UncaughtException(String::from("java.lang.NullPointerException"))
+            })?;
+            let reference = self.heap.alloc(copy);
+            frame.stack.push(JValue::Ref(Some(reference)));
+            return Ok(None);
+        }
         if target_class == "java/lang/Object"
             && matches!(method_name, "hashCode" | "toString" | "equals")
             && let Some(crate::value::HeapObject::Instance { class_name, .. }) =

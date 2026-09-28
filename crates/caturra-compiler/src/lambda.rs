@@ -476,6 +476,69 @@ fn collection_faces(
     faces
 }
 
+/// Why javac refuses `System.out.println(<this>)`: a `collect(...)` whose
+/// result only an INEXACT method reference (a constructor reference —
+/// `TreeMap::new` — as the map or collection factory) or a `collectingAndThen`
+/// finisher decides. `println`'s overloads are chosen before either is
+/// resolved, and one of them takes a `char[]`.
+fn println_collect_refusal(arg: &Expr, method: &str, kind: &str) -> Option<String> {
+    let Expr::Call {
+        method: collect,
+        args,
+        receiver: Some(_),
+        ..
+    } = arg
+    else {
+        return None;
+    };
+    let [collector] = &args[..] else {
+        return None;
+    };
+    if collect != "collect" {
+        return None;
+    }
+    let Expr::Call {
+        receiver: Some(owner),
+        method: factory,
+        args: factory_args,
+        ..
+    } = collector
+    else {
+        return None;
+    };
+    if !matches!(owner.as_ref(), Expr::Name { path, .. } if path.last().is_some_and(|n| n == "Collectors"))
+    {
+        return None;
+    }
+    let constructor_ref = |at: usize| matches!(factory_args.get(at), Some(Expr::MethodRef { method, .. }) if method == "new");
+    // `append` is ambiguous either way (javac names whichever pair of its
+    // many overloads it compared, so only the headline is given).
+    let refused = matches!(
+        (factory.as_str(), factory_args.len()),
+        ("collectingAndThen", 2)
+    ) || matches!((factory.as_str(), factory_args.len()), ("groupingBy", 3))
+        && constructor_ref(1)
+        || matches!((factory.as_str(), factory_args.len()), ("toMap", 4)) && constructor_ref(3)
+        || matches!((factory.as_str(), factory_args.len()), ("toCollection", 1))
+            && constructor_ref(0);
+    if kind == "StringBuilder" {
+        return refused.then(|| format!("reference to {method} is ambiguous"));
+    }
+    match (factory.as_str(), factory_args.len()) {
+        ("collectingAndThen", 2) => Some(format!(
+            "reference to {method} is ambiguous\n  both method {method}(char[]) in PrintStream and method {method}(String) in PrintStream match"
+        )),
+        ("groupingBy", 3) if constructor_ref(1) => Some(incompatible_r()),
+        ("toMap", 4) if constructor_ref(3) => Some(incompatible_r()),
+        ("toCollection", 1) if constructor_ref(0) => Some(incompatible_r()),
+        _ => None,
+    }
+}
+
+fn incompatible_r() -> String {
+    String::from("incompatible types: inference variable R has incompatible bounds")
+}
+
 /// A value of a class that extends a builtin collection, handed on as an
 /// argument (or walked by a for-each), read through the upcast to that
 /// collection — which is all the LIBRARY sees it as. Left alone where a
@@ -3372,6 +3435,39 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             type_args,
             span,
         } => {
+            // `System.out.println(stream.collect(…))` where only a METHOD
+            // REFERENCE or a finisher fixes what the collector makes: javac
+            // resolves `println`'s overloads (one takes `char[]`) before that
+            // is known, and refuses — in words that depend on which.
+            // (`StringBuilder.append` has the same `char[]` overload, and a
+            // `PrintStream` held in a variable is the same `println`.)
+            let overloaded_receiver = match receiver.as_deref() {
+                Some(Expr::Name { path, .. })
+                    if path.len() == 2
+                        && path[0] == "System"
+                        && matches!(path[1].as_str(), "out" | "err") =>
+                {
+                    Some("PrintStream")
+                }
+                Some(other) => match declared_class_name(other, ctx).as_deref() {
+                    Some("PrintStream") => Some("PrintStream"),
+                    Some("StringBuilder" | "StringBuffer") => Some("StringBuilder"),
+                    _ => None,
+                },
+                None => None,
+            };
+            if let Some(kind) = overloaded_receiver
+                && match kind {
+                    "PrintStream" => matches!(method.as_str(), "println" | "print"),
+                    _ => method == "append",
+                }
+                && let [only] = &args[..]
+                && let Some(message) = println_collect_refusal(only, method, kind)
+            {
+                let at = only.span();
+                ctx.diags
+                    .push(crate::diagnostics::Diagnostic::error(ctx.path, message, at));
+            }
             // A call on a class that extends a builtin collection, for a
             // member the collection declares: read through the upcast.
             if let Some(face) = face_receiver(receiver.as_deref(), method, args.len(), ctx) {
@@ -7599,6 +7695,23 @@ fn library_return(receiver: &TypeRef, method: &str, argc: usize) -> Option<TypeR
         TypeRef::Generic { base, .. } => base.rsplit('.').next().unwrap_or(base),
         _ => return None,
     };
+    // A functional interface's OWN method answers its result argument:
+    // `Supplier<String>.get()` is a String, `Function<A, B>.apply(a)` a `B`.
+    // Without it `suppliers.stream().map(s -> s.get())` streamed `Object`s.
+    if let TypeRef::Generic { args, .. } = receiver
+        && let Some((sam, arity)) = match base {
+            "Supplier" => Some(("get", 0)),
+            "Callable" => Some(("call", 0)),
+            "Function" | "UnaryOperator" => Some(("apply", 1)),
+            "BiFunction" | "BinaryOperator" => Some(("apply", 2)),
+            "IntFunction" | "LongFunction" | "DoubleFunction" => Some(("apply", 1)),
+            _ => None,
+        }
+        && method == sam
+        && argc == arity
+    {
+        return args.last().cloned();
+    }
     let string = || TypeRef::Named(String::from("String"));
     // A collection face, for the methods every one of them shares.
     let collection = matches!(
@@ -9802,6 +9915,7 @@ fn build_erased_lambda(
         is_enum: false,
         is_anonymous: true,
         is_local: false,
+        declared_at: None,
         is_inner: false,
         type_params: Vec::new(),
         fields: Vec::new(),
@@ -10177,6 +10291,7 @@ fn build_lambda_class(
         is_enum: false,
         is_anonymous: true,
         is_local: false,
+        declared_at: None,
         is_inner: false,
         type_params: Vec::new(),
         fields: Vec::new(),

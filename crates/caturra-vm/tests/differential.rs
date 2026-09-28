@@ -65636,3 +65636,384 @@ public class CombinatorTypes {
 }
 "#
 );
+
+// javac resolves `println`'s overloads (one takes a `char[]`) before a
+// `collect(...)` argument's result is known when only an INEXACT method
+// reference decides it — a constructor reference as the map or collection
+// factory — or a `collectingAndThen` finisher, and refuses. A lambda factory,
+// string concatenation, `String.valueOf`, or a variable in between all
+// compile. `StringBuilder.append` shares the `char[]` overload.
+
+differential_wording!(
+    println_of_a_collect_with_a_constructor_reference,
+    "PrintlnCollectFactory",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrintlnCollectFactory {
+    public static void main(String[] args) {
+        List<String> w = List.of("a", "bb", "cc");
+        System.out.println(w.stream().collect(Collectors.groupingBy(String::length, TreeMap::new, Collectors.counting())));
+    }
+}
+"#
+);
+
+differential_wording!(
+    println_of_collecting_and_then,
+    "PrintlnCollectingAndThen",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class PrintlnCollectingAndThen {
+    public static void main(String[] args) {
+        List<String> w = List.of("a", "bb", "cc");
+        System.out.println(w.stream().collect(Collectors.collectingAndThen(Collectors.toList(), List::size)));
+    }
+}
+"#
+);
+
+differential_wording!(
+    append_of_a_collect_with_a_constructor_reference,
+    "AppendCollectFactory",
+    r#"
+import java.util.*;
+import java.util.stream.*;
+
+public class AppendCollectFactory {
+    public static void main(String[] args) {
+        List<String> w = List.of("a", "bb", "cc");
+        new StringBuilder().append(w.stream().collect(Collectors.toCollection(TreeSet::new)));
+    }
+}
+"#
+);
+
+// ...and the newer collection APIs (Java 9-11) around them, run: the
+// grouping and mapping collectors, `iterate` with a predicate, `takeWhile`/
+// `dropWhile`, `Optional.or`/`stream`/`ifPresentOrElse`, `Map.ofEntries`,
+// `merge` that removes, `List.copyOf`, `Predicate.not`, `nullsFirst`.
+differential_test!(
+    newer_collection_apis,
+    "NewerCollectionApis",
+    r##"
+import java.util.*;
+import java.util.function.*;
+import java.util.stream.*;
+
+public class NewerCollectionApis {
+    static class P {
+        final String name; final int age; final String city;
+        P(String n, int a, String c) { name = n; age = a; city = c; }
+        String name() { return name; } int age() { return age; } String city() { return city; }
+        public String toString() { return name; }
+    }
+    public static void main(String[] args) {
+        List<P> ps = List.of(new P("ann", 30, "NY"), new P("bob", 25, "LA"), new P("cy", 35, "NY"), new P("dee", 25, "SF"), new P("ed", 40, "LA"));
+        System.out.println(ps.stream().sorted(Comparator.comparing(P::city, Comparator.reverseOrder()).thenComparingInt(P::age)).collect(Collectors.toList()));
+        Object r1 = ps.stream().collect(Collectors.groupingBy(P::city, TreeMap::new, Collectors.mapping(P::name, Collectors.joining("|"))));
+        System.out.println(r1);
+        Object r2 = ps.stream().collect(Collectors.groupingBy(P::age, TreeMap::new, Collectors.counting()));
+        System.out.println(r2);
+        System.out.println(ps.stream().collect(Collectors.partitioningBy(p -> p.age() >= 30, Collectors.averagingInt(P::age))));
+        Object r3 = ps.stream().collect(Collectors.collectingAndThen(Collectors.toList(), List::size));
+        System.out.println(r3);
+        Object r4 = ps.stream().collect(Collectors.toMap(P::name, P::age, Integer::sum, LinkedHashMap::new));
+        System.out.println(r4);
+        Object r5 = ps.stream().collect(Collectors.groupingBy(P::city, TreeMap::new, Collectors.filtering(p -> p.age() > 26, Collectors.toList())));
+        System.out.println(r5);
+        Object r6 = ps.stream().collect(Collectors.groupingBy(P::city, TreeMap::new, Collectors.flatMapping(p -> p.name().chars().mapToObj(c -> (char) c), Collectors.toSet())));
+        System.out.println(r6);
+        System.out.println(ps.stream().map(P::age).reduce(0, Integer::sum) + " " + ps.stream().mapToInt(P::age).summaryStatistics());
+        System.out.println(ps.stream().max(Comparator.comparingInt(P::age)).map(P::name).orElse("-") + " " + ps.stream().min(Comparator.comparing(P::name, Comparator.comparing(String::length))).get());
+        System.out.println(Stream.iterate(1, x -> x < 100, x -> x * 3).collect(Collectors.toList()) + " " + IntStream.iterate(1, x -> x * 2).takeWhile(x -> x < 50).boxed().collect(Collectors.toList()));
+        System.out.println(Stream.of(1, 2, 3, 4, 1, 2).dropWhile(x -> x < 3).collect(Collectors.toList()) + " " + Stream.ofNullable(null).count() + " " + Stream.of("a", "", "b").filter(Predicate.not(String::isEmpty)).collect(Collectors.toList()));
+        Optional<String> o = Optional.of("v");
+        o.ifPresentOrElse(v -> System.out.print("has " + v), () -> System.out.print("none"));
+        Optional.empty().ifPresentOrElse(v -> System.out.print(" has"), () -> System.out.print(" none"));
+        System.out.println(" " + Optional.empty().or(() -> Optional.of("alt")).get() + " " + o.stream().count() + " " + o.filter(s -> s.length() > 3).isPresent());
+        Map<String, Integer> m = new TreeMap<>(Map.ofEntries(Map.entry("a", 1), Map.entry("b", 2)));
+        m.merge("a", 5, Integer::sum); m.merge("b", 0, (x, y) -> null); m.computeIfPresent("a", (k, v) -> v > 5 ? v * 10 : null); m.putIfAbsent("c", 3);
+        System.out.println(m + " " + m.getOrDefault("z", -1) + " " + List.copyOf(m.keySet()) + " " + Collections.nCopies(3, "x"));
+        List<Integer> nums = new ArrayList<>(IntStream.rangeClosed(1, 6).boxed().collect(Collectors.toList()));
+        Collections.rotate(nums, 2); Collections.swap(nums, 0, 5);
+        System.out.println(nums + " " + Collections.frequency(nums, 3) + " " + Collections.disjoint(nums, List.of(9)) + " " + Collections.binarySearch(List.of(1, 3, 5), 4));
+        List<Integer> fixed = Arrays.asList(3, 1, 2); fixed.set(0, 9); Collections.sort(fixed);
+        try { fixed.add(4); } catch (UnsupportedOperationException e) { System.out.println(fixed + " UOE"); }
+        System.out.println(Stream.of("b", null, "a").sorted(Comparator.nullsFirst(Comparator.naturalOrder())).collect(Collectors.toList()) + " " + Stream.of(3, 1, 2).reduce(BinaryOperator.maxBy(Comparator.naturalOrder())).get());
+        System.out.println(IntStream.range(0, 20).filter(i -> i % 3 == 0).mapToObj(Integer::toString).collect(Collectors.joining(",", "<", ">")) + " " + "hello".chars().filter(c -> "aeiou".indexOf(c) >= 0).count());
+        List<List<Integer>> nested = List.of(List.of(1, 2), List.of(3), List.of());
+        System.out.println(nested.stream().flatMap(List::stream).map(x -> x * x).collect(Collectors.toUnmodifiableList()) + " " + nested.stream().mapToInt(List::size).max().getAsInt());
+        Iterator<Integer> it = List.of(1, 2, 3).iterator(); it.next(); it.forEachRemaining(x -> System.out.print(x + ";"));
+        System.out.println();
+        Supplier<Stream<String>> words = () -> Stream.of("aa", "b", "cc", "ddd");
+        System.out.println(words.get().collect(Collectors.groupingBy(String::length)) + " " + words.get().anyMatch(w -> w.length() > 2) + " " + words.get().allMatch(w -> !w.isEmpty()) + " " + words.get().noneMatch(String::isBlank) + " " + words.get().skip(1).limit(2).collect(Collectors.toList()) + " " + words.get().distinct().count());
+        double[] ds = ps.stream().mapToDouble(P::age).map(Math::sqrt).toArray();
+        System.out.println(ds.length + " " + String.format("%.3f", Arrays.stream(ds).average().orElse(0)) + " " + DoubleStream.of(1, 2).boxed().collect(Collectors.toList()));
+    }
+}
+"##
+);
+
+// `Object.clone()` is `protected` and declares CloneNotSupportedException:
+// an override may stay protected and may declare it; `super.clone()` is the
+// field-by-field copy (non-virtually, so the VM answers `Object`'s own), and
+// unhandled it is javac's unreported exception; an override that drops the
+// `throws` throws nothing; and a clone through an `Object` reference, or a
+// class that did not make it public, is "clone() has protected access".
+differential_test!(
+    clone_idioms,
+    "CloneIdioms",
+    r##"
+import java.util.*;
+public class CloneIdioms {
+    static class A implements Cloneable { int v = 1; int[] arr = {1, 2}; public A clone() { try { return (A) super.clone(); } catch (CloneNotSupportedException e) { throw new RuntimeException(e); } } }
+    static class B extends A { String tag = "b"; }
+    static class C { protected Object dup() throws CloneNotSupportedException { return super.clone(); } }
+    static class D extends A { @Override public D clone() { D d = (D) super.clone(); d.v = 99; return d; } }
+    public static void main(String[] args) throws Exception {
+        A a = new A(); A a2 = a.clone(); a2.v = 5; a2.arr[0] = 9;
+        System.out.println(a.v + " " + a2.v + " " + a.arr[0] + " " + (a.arr == a2.arr));
+        B b = new B(); A b2 = b.clone();
+        System.out.println(b2.getClass().getSimpleName() + " " + ((B) b2).tag + " " + (b2 != b));
+        try { new C().dup(); } catch (CloneNotSupportedException e) { System.out.println("CNSE " + e.getMessage()); }
+        D d = new D(); D d2 = d.clone();
+        System.out.println(d.v + " " + d2.v + " " + d2.getClass().getSimpleName());
+        int[][] m = {{1}, {2}}; int[][] mc = m.clone(); mc[0][0] = 7; mc[1] = new int[] {8};
+        System.out.println(Arrays.deepToString(m) + " " + Arrays.deepToString(mc));
+    }
+}
+"##
+);
+
+// ...user types as keys and elements in the library, and the common text
+// idioms (the probe that found the `protected clone()` refusal).
+differential_test!(
+    user_types_in_the_library,
+    "UserTypesInTheLibrary",
+    r##"
+import java.util.*;
+
+public class UserTypesInTheLibrary {
+    static final class Point implements Comparable<Point>, Cloneable {
+        final int x, y;
+        Point(int x, int y) { this.x = x; this.y = y; }
+        @Override public boolean equals(Object o) {
+            if (this == o) return true;
+            if (!(o instanceof Point)) return false;
+            Point p = (Point) o;
+            return x == p.x && y == p.y;
+        }
+        @Override public int hashCode() { return Objects.hash(x, y); }
+        @Override public int compareTo(Point o) { return x != o.x ? Integer.compare(x, o.x) : Integer.compare(y, o.y); }
+        @Override public String toString() { return "(" + x + "," + y + ")"; }
+        @Override public Point clone() { try { return (Point) super.clone(); } catch (CloneNotSupportedException e) { throw new AssertionError(e); } }
+        double dist(Point o) { return Math.sqrt(Math.pow(x - o.x, 2) + Math.pow(y - o.y, 2)); }
+    }
+    enum Shape {
+        CIRCLE { double area(double r) { return Math.PI * r * r; } },
+        SQUARE { double area(double s) { return s * s; } };
+        abstract double area(double size);
+    }
+    static class Grid implements Cloneable {
+        int[][] cells = new int[2][2];
+        @Override protected Grid clone() throws CloneNotSupportedException { Grid g = (Grid) super.clone(); g.cells = cells.clone(); return g; }
+    }
+    public static void main(String[] args) throws Exception {
+        Map<Point, String> names = new HashMap<>();
+        names.put(new Point(1, 2), "a"); names.put(new Point(1, 2), "b"); names.put(new Point(0, 0), "o");
+        System.out.println(names.size() + " " + names.get(new Point(1, 2)) + " " + names.containsKey(new Point(0, 0)));
+        TreeMap<Point, Integer> tm = new TreeMap<>();
+        for (int i = 3; i >= 0; i--) tm.put(new Point(i % 2, i), i);
+        System.out.println(tm + " " + tm.firstKey() + " " + tm.ceilingKey(new Point(1, 0)) + " " + tm.headMap(new Point(1, 0)));
+        Set<Point> set = new TreeSet<>(Comparator.comparingInt((Point p) -> p.y).reversed());
+        set.addAll(List.of(new Point(5, 1), new Point(2, 3), new Point(9, 1)));
+        System.out.println(set);
+        Point p = new Point(3, 4), q = p.clone();
+        System.out.println((p == q) + " " + p.equals(q) + " " + p.dist(new Point(0, 0)) + " " + p.compareTo(q) + " " + new Point(1, 1).equals(null) + " " + new Point(1, 1).equals("x"));
+        Grid g = new Grid(); Grid g2 = g.clone(); g2.cells[0][0] = 7; g2.cells[1] = new int[] {8, 8};
+        System.out.println(Arrays.deepToString(g.cells) + " " + Arrays.deepToString(g2.cells));
+        for (Shape s : Shape.values()) System.out.printf("%s %.2f %s%n", s, s.area(2), s.getClass() == Shape.class);
+        String text = "The quick brown fox jumps over the lazy dog the end";
+        Map<String, Integer> freq = new TreeMap<>();
+        for (String w : text.toLowerCase().split(" ")) freq.put(w, freq.getOrDefault(w, 0) + 1);
+        System.out.println(freq);
+        int[] counts = new int[26];
+        for (char c : text.toLowerCase().toCharArray()) if (Character.isLetter(c)) counts[c - 'a']++;
+        StringBuilder top = new StringBuilder();
+        for (int i = 0; i < 26; i++) if (counts[i] >= 3) top.append((char) ('a' + i)).append(counts[i]);
+        System.out.println(top);
+        String s = "A man, a plan, a canal: Panama";
+        String clean = s.replaceAll("[^A-Za-z]", "").toLowerCase();
+        System.out.println(clean + " " + new StringBuilder(clean).reverse().toString().equals(clean) + " " + s.indexOf("plan") + " " + s.lastIndexOf('a') + " " + s.contains("canal") + " " + s.startsWith("A man") + " " + "b".compareTo("a") + " " + "apple".compareTo("apricot") + " " + "Z".compareToIgnoreCase("a"));
+        System.out.println(String.format("|%-10s|%6s|%6.2f|", "name", "qty", 3.5) + String.format("|%-10s|%6d|%6.2f|", "widget", 42, 19.999));
+        String csv = "name,age,,city,";
+        System.out.println(Arrays.toString(csv.split(",")) + " " + Arrays.toString(csv.split(",", -1)) + " " + csv.chars().filter(c -> c == ',').count() + " " + String.valueOf(new char[] {'h', 'i'}) + " " + "hello".charAt(1) + "hello".substring(3) + " " + "Mississippi".replace("ss", "SS") + " " + "  x ".length());
+        char[] cs = "dcba".toCharArray(); Arrays.sort(cs);
+        System.out.println(new String(cs) + " " + String.valueOf(cs, 1, 2) + " " + "a-b-c".replace('-', '+') + " " + "tEsT".toUpperCase() + "tEsT".toLowerCase() + " " + "x".equals(new String("x")) + " " + ("x" == new String("x").intern()));
+    }
+}
+"##
+);
+
+differential_wording!(
+    clone_through_an_object_reference,
+    "CloneThroughObject",
+    r#"
+public class CloneThroughObject {
+    static class G { void m() { Object o = new Object(); o.clone(); } }
+    public static void main(String[] args) {}
+}
+"#
+);
+
+differential_wording!(
+    an_unhandled_super_clone,
+    "UnhandledSuperClone",
+    r#"
+public class UnhandledSuperClone {
+    static class Q implements Cloneable { void m() { Object x = super.clone(); } }
+    public static void main(String[] args) {}
+}
+"#
+);
+
+differential_wording!(
+    an_unhandled_exception_from_a_super_call,
+    "UnhandledSuperCall",
+    r#"
+public class UnhandledSuperCall {
+    static class Base { void run() throws java.io.IOException {} } static class Sub extends Base { void other() { super.run(); } }
+    public static void main(String[] args) {}
+}
+"#
+);
+
+// Local and anonymous classes, captures and nested inner classes — and the
+// two gaps the probe found: a CONSTRUCTOR REFERENCE to a local class that
+// captures (`Square::new`, whose qualifier the parser's rename of the hoisted
+// class did not reach), and a functional interface as a collection ELEMENT
+// keeping its result (`makers.get("sq").get().label()`).
+differential_test!(
+    local_and_anonymous_classes,
+    "LocalAndAnonymous",
+    r##"
+import java.util.*;
+import java.util.function.*;
+
+public class LocalAndAnonymous {
+    private int secret = 7;
+    private static int shared = 100;
+    interface Shape { double area(); default String label() { return getClass().getSimpleName() + ":" + area(); } }
+    class Wrapper {
+        int peek() { return secret + shared; }
+        class Deeper { int both() { return secret * 2 + peek(); } }
+    }
+    static class Registry {
+        private final Map<String, Supplier<Shape>> makers = new LinkedHashMap<>();
+        void register(String n, Supplier<Shape> s) { makers.put(n, s); }
+        List<String> labels() { List<String> out = new ArrayList<>(); makers.forEach((k, v) -> out.add(k + "=" + v.get().label())); return out; }
+    }
+    static List<Runnable> makeCounters(int n) {
+        List<Runnable> out = new ArrayList<>();
+        for (int i = 0; i < n; i++) {
+            final int id = i;
+            int[] hits = {0};
+            out.add(() -> { hits[0]++; System.out.print(id + ":" + hits[0] + " "); });
+        }
+        return out;
+    }
+    Runnable bump() { return () -> secret++; }
+
+    public static void main(String[] args) {
+        int base = 3;
+        class Square implements Shape {
+            final double side;
+            Square(double s) { side = s + base; }
+            public double area() { return side * side; }
+        }
+        Shape anon = new Shape() {
+            double r = 1;
+            public double area() { return Math.round(Math.PI * r * r * 100) / 100.0; }
+            @Override public String label() { return "circle:" + area(); }
+        };
+        System.out.println(new Square(1).label() + " " + anon.label() + " " + anon.getClass().getName() + " " + new Square(2).getClass().getName());
+        Registry reg = new Registry();
+        reg.register("sq", () -> new Square(0));
+        reg.register("circ", () -> anon);
+        reg.register("tri", () -> () -> 0.5);
+        System.out.println(reg.labels().size() + " " + reg.labels().get(0) + " " + reg.labels().get(1));
+        List<Runnable> cs = makeCounters(3);
+        cs.get(0).run(); cs.get(0).run(); cs.get(2).run();
+        System.out.println();
+        LocalAndAnonymous outer = new LocalAndAnonymous();
+        LocalAndAnonymous.Wrapper w = outer.new Wrapper();
+        LocalAndAnonymous.Wrapper.Deeper d = w.new Deeper();
+        outer.bump().run(); outer.bump().run(); shared = 1;
+        System.out.println(w.peek() + " " + d.both() + " " + outer.secret);
+        Function<Integer, Function<Integer, Integer>> adder = x -> y -> x + y + base;
+        System.out.println(adder.apply(1).apply(2));
+        BiFunction<String, Integer, String> rep = String::repeat;
+        Function<String, String> up = String::toUpperCase;
+        Supplier<List<String>> mk = ArrayList::new;
+        List<String> made = mk.get(); made.add(rep.andThen(up).apply("ab", 2));
+        System.out.println(made);
+        Comparator<String> byLen = Comparator.comparing(String::length);
+        List<String> ws = new ArrayList<>(List.of("ccc", "a", "bb", "dd"));
+        ws.sort(byLen.thenComparing(Comparator.reverseOrder()));
+        System.out.println(ws);
+        Optional<Shape> big = reg.makers.values().stream().map(Supplier::get).filter(s -> s.area() > 5).findFirst();
+        System.out.println(big.map(Shape::label).orElse("none"));
+        Runnable r = new Runnable() { int count; public void run() { count++; if (count < 3) run(); System.out.print("r" + count + " "); } };
+        r.run();
+        System.out.println();
+        Object[] holder = new Object[1];
+        Runnable self = new Runnable() { public void run() { holder[0] = this; } };
+        self.run();
+        System.out.println(holder[0] == self);
+    }
+}
+"##
+);
+
+differential_test!(
+    a_functional_element_keeps_its_result,
+    "FunctionalElements",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class FunctionalElements {
+    static class Dog {
+        String name() {
+            return "rex";
+        }
+    }
+
+    public static void main(String[] args) {
+        int base = 3;
+        class Square {
+            int side() {
+                return base;
+            }
+        }
+        List<Supplier<String>> suppliers = new ArrayList<>();
+        suppliers.add(() -> "xy");
+        String first = suppliers.get(0).get();
+        var again = suppliers.get(0);
+        Map<String, Function<Integer, Integer>> ops = new HashMap<>();
+        ops.put("inc", x -> x + 1);
+        int five = ops.get("inc").apply(4);
+        List<Supplier<Dog>> dogs = new ArrayList<>();
+        dogs.add(Dog::new);
+        Supplier<Square> makeSquare = Square::new;
+        Optional<Supplier<String>> maybe = Optional.of(suppliers.get(0));
+        System.out.println(first + " " + again.get().length() + " " + five + " " + dogs.get(0).get().name()
+            + " " + suppliers.iterator().next().get().length() + " " + makeSquare.get().side() + " " + maybe.get().get());
+    }
+}
+"#
+);

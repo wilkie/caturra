@@ -12548,6 +12548,89 @@ its lambda protocol uses (`IntStream.reduce` asks for `apply`) finds the
 erased method instead (`erased_functional_method`). Pinned by
 `a_class_implements_a_primitive_functional_interface`.
 
+### A functional element keeps its result; `Local::new` (2026-09-27)
+
+A PARAMETERIZED functional interface as a collection element —
+`List<Supplier<String>>`, `Map<String, Function<Integer, Integer>>` — erased
+to the bare bundled interface, so an element read back (`get(0)`,
+`iterator().next()`, a `var`) answered `T` from its `get()`/`apply()`: "T
+cannot be converted to String". Through a declared variable the same element
+was fine. The element is now the whole type, interned as a nested element
+whose storage is still the erased interface, so a read keeps the one argument
+a function value carries — its result.
+
+And a constructor reference to a LOCAL class (`Square::new`) built `new
+Square()` under the name as written, where the class is hoisted under a mangled
+one: the parser's rename of the local class reached every `new` and every
+dotted path, but a method reference's bare qualifier looked like a value and
+was skipped.
+
+The same probe found the capture pass computing a local class's captures only
+at a `new` site: a local class the method never instantiated (or only inside a
+lambda, where the lambda then did not capture what it needed to pass on) was
+"cannot find symbol: variable base". The parser now leaves a `Stmt::Empty`
+where the declaration stood — a local class declaration IS a statement for
+reachability, so `return; class X {}` is javac's "unreachable statement" here
+too — and records it (`ClassDecl::declared_at`); the capture walk gives the
+class the locals in scope there. A real `new` site still claims the class, and
+EVERY creator is recorded (`created_by`), so a lambda that creates a capturing
+local class captures what it needs even when the method creates one too.
+And a functional interface's own method answers its result argument in the
+lambda pass (`Supplier<String>.get()` is a `String`), so
+`suppliers.stream().map(Supplier::get)` streams Strings.
+
+Pinned by `local_and_anonymous_classes` and
+`a_functional_element_keeps_its_result`.
+
+### `Object.clone()` as the JDK declares it (2026-09-27)
+
+`protected Grid clone()` was refused — "attempting to assign weaker access
+privileges; was public" — because the synthetic `Object` recorded no access
+for its members, and the default was public. `Object.clone()` (and
+`finalize()`) are PROTECTED, which the table now says; and they declare what
+they throw (`CloneNotSupportedException`, `Throwable`), so an override may
+declare it too. The rest of the contract came with it:
+
+- `super.clone()` reaches the VM as a non-virtual `Object.clone`, which is the
+  field-by-field copy — refused with `CloneNotSupportedException: <class>` for
+  a class that is not `Cloneable`. It was an "unknown native member".
+- A `super.m()` call's checked exceptions are the overridden method's — the
+  superclass's clause (walking up), `Object`'s for a class that extends
+  nothing, the named interface's for `Iface.super.m()` — where every one used
+  to count as "unknown" and none was ever reported. An unhandled
+  `super.clone()` is javac's unreported CloneNotSupportedException.
+- A class that redeclares a method with no `throws` answers for it: the walk
+  that finds a call's clause stops at the first class that DECLARES the
+  method, so `new Q().clone()` of a `public Q clone()` throws nothing.
+- `clone()` through an `Object` reference, or on a class that did not make it
+  public, is javac's "clone() has protected access in Object" (JLS §6.6.2.1:
+  only on a reference of the caller's own type or a subclass's).
+
+Pinned by `clone_idioms`, `user_types_in_the_library`,
+`clone_through_an_object_reference`, `an_unhandled_super_clone` and
+`an_unhandled_exception_from_a_super_call`.
+
+### `println` of a collect javac cannot resolve (2026-09-27)
+
+`System.out.println(words.stream().collect(Collectors.groupingBy(String::length,
+TreeMap::new, Collectors.counting())))` runs here and is refused by javac:
+`println` is overloaded (one overload takes a `char[]`), and its overload is
+chosen before a `collect(...)` argument's result is known when only an
+INEXACT method reference decides that result — a constructor reference as
+the map or collection factory of `groupingBy`/`toMap`/`toCollection` — or a
+`collectingAndThen` finisher does. javac says "inference variable R has
+incompatible bounds" for the first and "reference to println is ambiguous"
+for the second; `StringBuilder.append`, which shares the `char[]` overload,
+says "reference to append is ambiguous" for both. The lambda pass refuses the
+same shapes (`println_collect_refusal`) on `System.out`/`System.err`, a
+`PrintStream` variable and a builder; a lambda factory (`() -> new
+TreeMap<>()`), string concatenation, `String.valueOf`, `printf`, or a variable
+in between compile in both. Pinned by
+`println_of_a_collect_with_a_constructor_reference`,
+`println_of_collecting_and_then`,
+`append_of_a_collect_with_a_constructor_reference` and
+`newer_collection_apis`.
+
 ### Function combinators and lambdas as elements (2026-09-27)
 
 Found by a grab-bag probe of legal Java no fuzzer writes. A `Function` is

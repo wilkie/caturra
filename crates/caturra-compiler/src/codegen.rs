@@ -1119,8 +1119,42 @@ impl MethodTable {
             by_source: std::collections::HashMap::new(),
             same_simple_name: std::collections::HashMap::new(),
             scope: std::cell::RefCell::default(),
-            throws_clauses: std::collections::HashMap::new(),
-            method_access: std::collections::HashMap::new(),
+            // ...and they declare what they throw, which an override may too.
+            throws_clauses: [
+                (
+                    (String::from("java/lang/Object"), String::from("clone"), 0),
+                    vec![String::from("CloneNotSupportedException")],
+                ),
+                (
+                    (
+                        String::from("java/lang/Object"),
+                        String::from("finalize"),
+                        0,
+                    ),
+                    vec![String::from("Throwable")],
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            // `Object.clone()` and `finalize()` are PROTECTED: an override
+            // may keep them protected (`protected Grid clone()`), which the
+            // default of public read as weakening the access.
+            method_access: [
+                (
+                    (String::from("java/lang/Object"), String::from("clone"), 0),
+                    2,
+                ),
+                (
+                    (
+                        String::from("java/lang/Object"),
+                        String::from("finalize"),
+                        0,
+                    ),
+                    2,
+                ),
+            ]
+            .into_iter()
+            .collect(),
             synthesized: std::collections::HashSet::new(),
         };
         // The synthetic top type: `Object`. It carries the universal
@@ -3051,6 +3085,17 @@ impl MethodTable {
                 .get(&(name.clone(), method.to_owned(), arity))
             {
                 return list;
+            }
+            // A class that DECLARES the method with no `throws` answers for
+            // it: an override that drops `Object.clone`'s
+            // CloneNotSupportedException throws nothing.
+            if self.info(&name).is_some_and(|info| {
+                info.methods
+                    .iter()
+                    .any(|m| m.name == method && m.params.len() == arity)
+            }) && name != self.class_name(self.object_id)
+            {
+                return &[];
             }
             current = self
                 .info(&name)
@@ -6038,13 +6083,26 @@ fn elem_from_type_arg(arg: &TypeRef, table: &MethodTable) -> Option<ElemType> {
         // `Map<String, Function<Integer, Integer>>`, the strategy table. Its
         // type arguments erase, exactly as they do for a variable of that
         // type, so the element is a plain reference to the bundled interface.
+        //
+        // ...but it keeps its RESULT, the one argument a function value carries
+        // (`Supplier<String>` is the bundled interface answering `String`):
+        // erased to the bare interface, `suppliers.get(0).get()` answered
+        // `T`, while the same element through a declared variable was fine.
         TypeRef::Generic { base, .. }
             if !table.has_class(base)
                 && functional_erased(base).is_some_and(|erased| table.has_class(erased)) =>
         {
-            functional_erased(base)
-                .and_then(|erased| table.class_id(erased))
-                .map(ElemType::Object)
+            match table.resolve_type(arg) {
+                Some(inner @ JType::Generic { .. }) => Some(ElemType::Nested {
+                    inner: table.intern_nested(inner),
+                    read: functional_erased(base)
+                        .and_then(|erased| table.class_id(erased))
+                        .unwrap_or(table.object_id),
+                }),
+                _ => functional_erased(base)
+                    .and_then(|erased| table.class_id(erased))
+                    .map(ElemType::Object),
+            }
         }
         TypeRef::Generic { .. } => match table.resolve_type(arg) {
             // `List<Class<?>>` — the arguments of a type that ERASES to one
@@ -38978,6 +39036,20 @@ impl BodyGen<'_> {
                 format!("{method}() has private access in {class_name}"),
             );
             return None;
+        }
+        // `Object.clone()` is PROTECTED, in another package: a class may call
+        // it only on a reference of its OWN type (or a subclass's) — `this`,
+        // `super`, another of its kind — never on an `Object` or an unrelated
+        // class that did not make it public (JLS §6.6.2.1).
+        if method == "clone" && args.is_empty() && !self.program_declares(&class_name, method, &[])
+        {
+            let caller = self
+                .lambda_enclosing()
+                .map_or(self.current_class_id, |(_, enclosing)| enclosing);
+            if !self.table.is_subtype(class_id, caller) {
+                self.error(span, "clone() has protected access in Object");
+                return None;
+            }
         }
         // An instance method's own type VARIABLES have to agree as a static
         // method's do (the static call site asked; this one did not).

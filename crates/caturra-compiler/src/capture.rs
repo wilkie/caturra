@@ -63,11 +63,15 @@ pub fn resolve_captures(
     for round in 0..6 {
         if round > 0 {
             created_in.clear();
-            for (inner, owner) in &found.owner {
-                created_in
-                    .entry(owner.clone())
-                    .or_default()
-                    .push(inner.clone());
+            for (inner, owner) in found
+                .owner
+                .iter()
+                .chain(found.created_by.iter().map(|(inner, owner)| (inner, owner)))
+            {
+                let inners = created_in.entry(owner.clone()).or_default();
+                if !inners.contains(inner) {
+                    inners.push(inner.clone());
+                }
             }
             let next = found.captures.clone();
             if round > 1 && next == outer_caps {
@@ -742,6 +746,14 @@ struct Found {
     /// `local variables referenced from a lambda expression must be final or
     /// effectively final`, one per offending `new Anon$N(...)` site.
     diagnostics: Vec<(String, SourceSpan)>,
+    /// Local classes whose owner so far is only their DECLARATION point: a
+    /// real `new` site (a lambda that creates one) claims them, which is what
+    /// makes the creator capture what the class needs.
+    declared_only: HashSet<String>,
+    /// EVERY class that creates each anonymous/local class — `owner` keeps
+    /// one, but a local class created both in its method and inside a lambda
+    /// there needs the lambda to capture what it needs too.
+    created_by: Vec<(String, String)>,
 }
 
 fn scope_lookup(scope: &Scope, name: &str) -> Option<TypeRef> {
@@ -907,7 +919,39 @@ fn find_in_stmts(stmts: &[Stmt], scope: &mut Scope, out: &mut Found, walk: &Walk
 fn find_in_stmt(stmt: &Stmt, scope: &mut Scope, out: &mut Found, walk: &Walk) {
     match stmt {
         // An empty statement does nothing and holds nothing.
-        Stmt::Empty(_) => {}
+        // Where a LOCAL class was declared: its captures are the locals in
+        // scope here, which a class never instantiated in this method (or
+        // only inside a lambda) would otherwise never be given.
+        Stmt::Empty(at) => {
+            if let Some((class, body)) = walk
+                .anon
+                .iter()
+                .find(|(_, body)| body.is_local && body.declared_at == Some(*at))
+                && !out.captures.contains_key(class)
+            {
+                let caps = captures_of(body, scope, walk.anon, walk.created_in);
+                // Nothing captured, nothing to record: the class is left as a
+                // `new` site (if any) would have left it.
+                if caps.is_empty() {
+                    return;
+                }
+                let written_inside = assigned_in_class(body);
+                for (name, _) in &caps {
+                    if !walk.mutations.effectively_final(name) || written_inside.contains(name) {
+                        out.diagnostics.push((
+                            String::from(
+                                "local variables referenced from an inner class must be final \
+                                 or effectively final",
+                            ),
+                            first_reference(body, name).unwrap_or(*at),
+                        ));
+                    }
+                }
+                out.captures.insert(class.clone(), caps);
+                out.owner.insert(class.clone(), walk.owner.to_owned());
+                out.declared_only.insert(class.clone());
+            }
+        }
         Stmt::Block(body) => find_in_stmts(body, scope, out, walk),
         Stmt::LocalDecl {
             ty, declarators, ..
@@ -1049,6 +1093,14 @@ fn find_in_expr(expr: &Expr, scope: &mut Scope, out: &mut Found, walk: &Walk) {
             }
             for a in args {
                 find_in_expr(a, scope, out, walk);
+            }
+            // A class captured at its DECLARATION is created here: this site
+            // is its owner, so whoever creates it passes its captures on.
+            if out.declared_only.remove(class) {
+                out.owner.insert(class.clone(), walk.owner.to_owned());
+            }
+            if walk.anon.contains_key(class) {
+                out.created_by.push((class.clone(), walk.owner.to_owned()));
             }
             if let Some(body) = walk.anon.get(class)
                 && !out.captures.contains_key(class)

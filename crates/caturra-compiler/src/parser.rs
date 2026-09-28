@@ -1234,6 +1234,7 @@ impl Parser<'_> {
             is_enum: false,
             is_anonymous: false,
             is_local: false,
+            declared_at: None,
             is_inner: false,
             type_params,
             fields,
@@ -2277,7 +2278,12 @@ impl Parser<'_> {
             // references to it in the rest of this block are rewritten below.
             if self.at_local_class_start() {
                 match self.local_class_decl() {
-                    Ok((name, decl)) => {
+                    Ok((name, mut decl)) => {
+                        // Where the declaration stood: a statement for
+                        // reachability (`return; class X {}` is unreachable),
+                        // and the point whose locals the class captures.
+                        decl.declared_at = Some(decl.span);
+                        statements.push(Stmt::Empty(decl.span));
                         // Two local classes of one name in the same block are a
                         // redeclaration (JLS §6.4): mangling them apart made
                         // both compile, and the second silently won.
@@ -2742,7 +2748,9 @@ impl Parser<'_> {
             {
                 if self.at_local_class_start() {
                     match self.local_class_decl() {
-                        Ok((name, decl)) => {
+                        Ok((name, mut decl)) => {
+                            decl.declared_at = Some(decl.span);
+                            body.push(Stmt::Empty(decl.span));
                             if locals
                                 .iter()
                                 .any(|(arm, _, _, seen, _)| *arm == arms.len() && *seen == name)
@@ -4451,6 +4459,7 @@ impl Parser<'_> {
             is_enum: false,
             is_anonymous: true,
             is_local: false,
+            declared_at: None,
             is_inner: false,
             type_params: Vec::new(),
             fields,
@@ -5426,6 +5435,7 @@ fn desugar_enum(
         binary_name: None,
         is_anonymous: false,
         is_local: false,
+        declared_at: None,
         is_inner: false,
         type_params: Vec::new(),
         fields: synth_fields,
@@ -6085,6 +6095,7 @@ fn erasure_target(tp: &TypeParam, span: SourceSpan, synthesized: &mut Vec<ClassD
             is_enum: false,
             is_anonymous: false,
             is_local: false,
+            declared_at: None,
             is_inner: false,
             is_nested: false,
             is_public: false,
@@ -6698,7 +6709,16 @@ fn rename_class_in_expr(expr: &mut Expr, from: &str, to: &str) {
                 rename_class_in_expr(e, from, to);
             }
         }
-        Expr::MethodRef { qualifier, .. } => rename_class_in_expr(qualifier, from, to),
+        // `C::new` / `C::staticMethod`: a bare qualifier naming the class IS
+        // the class (the Name arm renames only dotted paths, since a bare
+        // name elsewhere is a value). Missed, `Sq::new` on a local class
+        // built a `new Sq()` that named nothing.
+        Expr::MethodRef { qualifier, .. } => match qualifier.as_mut() {
+            Expr::Name { path, .. } if path.len() == 1 && path[0] == from => {
+                to.clone_into(&mut path[0]);
+            }
+            other => rename_class_in_expr(other, from, to),
+        },
         Expr::Lambda { params, body, .. } => {
             for p in params.iter_mut() {
                 if let Some(ty) = &mut p.ty {
