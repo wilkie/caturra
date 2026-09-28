@@ -2596,6 +2596,32 @@ fn library_constant_type(path: &[String]) -> Option<TypeRef> {
 #[allow(clippy::too_many_lines)] // one arm per expression shape
 fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
     use crate::ast::Literal;
+    // The four readings of a CALL, in their order, each asked ONCE. They were
+    // match guards (`if f(..).is_some() => f(..)`), which ask twice, and each
+    // types the receiver: two recursive readings per link made a chain like
+    // `s.trim().trim()…` cost 2^n.
+    if let Expr::Call {
+        receiver,
+        method,
+        args,
+        ..
+    } = expr
+    {
+        if let Some(ty) = generic_call_return(expr, ctx) {
+            return Some(ty);
+        }
+        if let Some(ty) = literal_collection_type(expr, ctx) {
+            return Some(ty);
+        }
+        if let Some(ty) = call_answer(expr, ctx) {
+            return Some(ty);
+        }
+        if let Some(owner) = receiver.as_deref()
+            && let Some(ty) = library_call_type(owner, method, args, ctx)
+        {
+            return Some(ty);
+        }
+    }
     match expr {
         // An ARRAY written inline says its own type. Without this a stream
         // whose element is an array — `Stream.iterate(new long[] {0, 1}, p ->
@@ -2624,9 +2650,6 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // variables pinned. `body_type` already asked this; the general reader
         // did not, so a lambda written on the RESULT of one — `boxOf("ab").map(
         // s -> s.length())` — saw a receiver with no type argument at all.
-        Expr::Call { .. } if generic_call_return(expr, ctx).is_some() => {
-            generic_call_return(expr, ctx)
-        }
         Expr::Field { object, name, .. } if matches!(**object, Expr::This { .. }) => {
             ctx.lookup(name)
         }
@@ -2712,9 +2735,6 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // The literal collection factories, read by a helper: they are how a
         // collection is written inline, and the spread rule is a paragraph of
         // its own.
-        Expr::Call { .. } if literal_collection_type(expr, ctx).is_some() => {
-            literal_collection_type(expr, ctx)
-        }
         // A method of the PROGRAM, on a receiver whose class can be named:
         // `new Roster().add(s)` answers a `Roster`, which is what a `var`
         // holding a builder chain needs — and without it the lambda in
@@ -2722,7 +2742,6 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // assigned to a DECLARED variable compiled. A method of the ENCLOSING
         // class, written by its simple name (`dir()`), is the same fact with
         // no receiver to read it from.
-        Expr::Call { .. } if call_answer(expr, ctx).is_some() => call_answer(expr, ctx),
         // A CONDITIONAL is its branches' type when they AGREE, which is the
         // half of JLS 15.25 that needs no join — enough to make
         // `(flag ? p : q).and(s -> …)` a functional-interface position, where
@@ -2737,14 +2756,6 @@ fn static_type_of(expr: &Expr, ctx: &Ctx) -> Option<TypeRef> {
         // A `var` holding one had no type, so the stream over it had no
         // element: the same gap as the user-method one, on the other half of
         // the world.
-        Expr::Call {
-            receiver: Some(owner),
-            method,
-            args,
-            ..
-        } if library_call_type(owner, method, args, ctx).is_some() => {
-            library_call_type(owner, method, args, ctx)
-        }
         // An enum's two synthetic statics: `values()` answers an ARRAY of the
         // enum, `valueOf(String)` one constant. Without them a stream, a list
         // or a `Stream.of` over `Kind.values()` had an `Object` element and
@@ -7060,7 +7071,17 @@ fn produced_type(decl: &ClassDecl, ctx: &Ctx) -> Option<TypeRef> {
 /// stream it denotes — the same answer, asked two different questions.
 fn lambda_answer(decl: &ClassDecl) -> Option<(&Expr, HashMap<String, TypeRef>)> {
     let body = decl.methods.iter().find(|method| !method.is_constructor)?;
-    let mut bound: HashMap<String, TypeRef> = HashMap::new();
+    // A parameter the interface's method DECLARES concretely (`R num(String
+    // n)` in a program's own `V<R>`) is the lambda's parameter as it stands —
+    // no erased `__caturraArg` is unwrapped into it — so it is bound from the
+    // declaration. Unbound, `open(k -> k.length())` answered nothing and `R`
+    // stayed `Object`. An unwrapped parameter below still overrides this.
+    let mut bound: HashMap<String, TypeRef> = body
+        .params
+        .iter()
+        .filter(|param| !param.name.starts_with("__caturraArg"))
+        .map(|param| (param.name.clone(), param.ty.clone()))
+        .collect();
     let mut answer = None;
     // The body's value may sit in the synthesized `__caturraResult` local,
     // which is DECLARED as the target's result type — `Object` when the target

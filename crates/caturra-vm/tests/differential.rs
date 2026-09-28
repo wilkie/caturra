@@ -66703,3 +66703,173 @@ public class AfterInit {
 }
 "#
 );
+
+// `boolean equals(Point p)` — the classic OVERLOAD that fails to override —
+// is what a JDK does NOT call from a collection, `Objects.equals` or through
+// an `Object`. The VM's last-resort dispatch matched `equals(Object)` by name
+// and argument count, so the overload answered all of them.
+differential_test!(
+    an_equals_overload_is_not_an_override,
+    "EqualsOverload",
+    r#"
+import java.util.*;
+
+public class EqualsOverload {
+    static class P {
+        int x;
+        P(int x) { this.x = x; }
+        public boolean equals(P o) { return o.x == x; }
+    }
+    static class Q {
+        int x;
+        Q(int x) { this.x = x; }
+        @Override public boolean equals(Object o) { return o instanceof Q && ((Q) o).x == x; }
+        @Override public int hashCode() { return x; }
+    }
+    public static void main(String[] args) {
+        List<P> ps = new ArrayList<>(List.of(new P(1)));
+        System.out.println(ps.contains(new P(1)) + " " + ps.indexOf(new P(1)) + " " + ps.remove(new P(1)));
+        System.out.println(new P(1).equals(new P(1)));
+        Object o = new P(1);
+        System.out.println(o.equals(new P(1)) + " " + Objects.equals(new P(1), new P(1)));
+        Set<P> set = new HashSet<>(List.of(new P(2)));
+        System.out.println(set.contains(new P(2)));
+        List<Q> qs = new ArrayList<>(List.of(new Q(1)));
+        System.out.println(qs.contains(new Q(1)) + " " + new HashSet<>(qs).contains(new Q(1)));
+    }
+}
+"#
+);
+
+// A generic method's variable pinned through a PROGRAM's own interface:
+// by a value of that interface (only a lambda written at the call was read),
+// by a class that IMPLEMENTS it (named, anonymous, generic), and by a lambda
+// whose body uses its parameter (declared concretely by the interface, so
+// never unwrapped, so never typed). The visitor is where all three meet.
+differential_test!(
+    a_method_variable_pinned_through_the_programs_own_interface,
+    "OwnInterfaceInference",
+    r##"
+public class OwnInterfaceInference {
+    interface V<R> { R num(int n); }
+    interface Named<R> { R get(); int size(); }
+    static class IntV implements V<Integer> { public Integer num(int n) { return n; } }
+    static class Sq<T> implements V<T> { T t; Sq(T t) { this.t = t; } public T num(int n) { return t; } }
+    static class Str implements Named<String> {
+        public String get() { return "abc"; }
+        public int size() { return 1; }
+    }
+    static <R> R run(V<R> v) { return v.num(3); }
+    static <R> R open(Named<R> n) { return n.get(); }
+
+    interface Visitor<R> { R num(int n); R add(Node a, Node b); }
+    interface Node { <R> R accept(Visitor<R> v); }
+    interface Leafy { <R> R accept(V<R> v); }
+    static class Leaf implements Leafy { public <R> R accept(V<R> v) { return v.num(5); } }
+
+    public static void main(String[] args) {
+        V<String> shown = k -> "#" + k;
+        System.out.println(run(shown).length());
+        System.out.println(run(new IntV()) + 1);
+        int anon = run(new V<Integer>() { public Integer num(int n) { return n * 10; } });
+        System.out.println(anon + 1);
+        System.out.println(run(new Sq<>("q")).length());
+        System.out.println(open(new Str()).length());
+        int doubled = run(k -> k * 2);
+        String text = run(k -> "n" + k);
+        System.out.println(doubled + text.length());
+        Leafy leaf = new Leaf();
+        int fromLeaf = leaf.accept(k -> k + 1);
+        System.out.println(fromLeaf);
+
+        Node one = new Node() { public <R> R accept(Visitor<R> v) { return v.num(1); } };
+        Node two = new Node() { public <R> R accept(Visitor<R> v) { return v.num(2); } };
+        Node sum = new Node() { public <R> R accept(Visitor<R> v) { return v.add(one, two); } };
+        int value = sum.accept(new Visitor<Integer>() {
+            public Integer num(int n) { return n; }
+            public Integer add(Node a, Node b) { return a.accept(this) + b.accept(this); }
+        });
+        String drawn = sum.accept(new Visitor<String>() {
+            public String num(int n) { return "" + n; }
+            public String add(Node a, Node b) { return "(" + a.accept(this) + "+" + b.accept(this) + ")"; }
+        });
+        System.out.println(drawn + "=" + value);
+    }
+}
+"##
+);
+
+// A fluent chain is typed LINK BY LINK, and two places typed each receiver
+// twice — the reflective `invoke` intercept (for every call, not only
+// `invoke`) and the lambda pass's match guards, which ask a question and then
+// ask it again. Twice per link is 2^n: a student's 28-call chain on `super`
+// took 17 seconds to compile, and these would not finish at all.
+differential_test!(
+    a_long_chain_compiles_in_linear_time,
+    "LongChains",
+    r#"
+import java.util.*;
+
+public class LongChains {
+    static class Painter {
+        int count;
+        Painter paint(int x, int y) { count += x + y; return this; }
+    }
+    static class Fancy extends Painter {
+        int run() {
+            return super
+            .paint(0, 0)
+            .paint(1, 1)
+            .paint(2, 2)
+            .paint(3, 0)
+            .paint(4, 1)
+            .paint(5, 2)
+            .paint(6, 0)
+            .paint(7, 1)
+            .paint(8, 2)
+            .paint(9, 0)
+            .paint(10, 1)
+            .paint(11, 2)
+            .paint(12, 0)
+            .paint(13, 1)
+            .paint(14, 2)
+            .paint(15, 0)
+            .paint(16, 1)
+            .paint(17, 2)
+            .paint(18, 0)
+            .paint(19, 1)
+            .paint(20, 2)
+            .paint(21, 0)
+            .paint(22, 1)
+            .paint(23, 2)
+            .paint(24, 0)
+            .paint(25, 1)
+            .paint(26, 2)
+            .paint(27, 0)
+            .paint(28, 1)
+            .paint(29, 2)
+            .paint(30, 0)
+            .paint(31, 1)
+            .paint(32, 2)
+            .paint(33, 0)
+            .paint(34, 1)
+            .paint(35, 2)
+            .paint(36, 0)
+            .paint(37, 1)
+            .paint(38, 2)
+            .paint(39, 0)
+                .count;
+        }
+    }
+    public static void main(String[] args) {
+        System.out.println(new Fancy().run());
+        String s = "  padded  ";
+        System.out.println("[" + s.trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim().trim() + "]");
+        Object nested = List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(7))))))))))))));
+        System.out.println(nested);
+        int deep = List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(List.of(7)))))))))))))).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0).get(0);
+        System.out.println(deep);
+    }
+}
+"#
+);

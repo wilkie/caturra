@@ -231,6 +231,26 @@ pub fn set_unit_functional_results(results: std::collections::HashMap<String, (u
     UNIT_FUNCTIONAL_RESULTS.with(|cell| *cell.borrow_mut() = results);
 }
 
+thread_local! {
+    /// Every file's functional interfaces, kept for the rest of ONE
+    /// compilation: the per-file registry is emptied when its erasure ends,
+    /// but codegen asks too — what a `V<String>` VALUE answers when it is
+    /// handed to `<R> R open(V<R> v)`, where no lambda was written.
+    static PROGRAM_FUNCTIONAL_RESULTS: std::cell::RefCell<std::collections::HashMap<String, (usize, usize)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Forget the previous compilation's functional interfaces.
+pub fn clear_program_functional_results() {
+    PROGRAM_FUNCTIONAL_RESULTS.with(|cell| cell.borrow_mut().clear());
+}
+
+/// Keep a file's functional interfaces for the rest of the compilation.
+pub fn keep_unit_functional_results() {
+    let unit = UNIT_FUNCTIONAL_RESULTS.with(|cell| cell.borrow().clone());
+    PROGRAM_FUNCTIONAL_RESULTS.with(|cell| cell.borrow_mut().extend(unit));
+}
+
 /// Which type argument of a functional interface written with `argc` of them
 /// is its RESULT: the last, for the library's (`Function<T, R>`), and whichever
 /// the method answers for one the same file declares (`interface Call<V> { V
@@ -242,12 +262,15 @@ pub fn functional_result_position(base: &str, argc: usize) -> Option<usize> {
     if let Some(arity) = functional_result_arity(simple) {
         return (arity == argc).then(|| arity - 1);
     }
-    UNIT_FUNCTIONAL_RESULTS.with(|cell| {
-        cell.borrow()
+    let lookup = |results: &std::collections::HashMap<String, (usize, usize)>| {
+        results
             .get(simple)
             .filter(|(arity, _)| *arity == argc)
             .map(|(_, position)| *position)
-    })
+    };
+    UNIT_FUNCTIONAL_RESULTS
+        .with(|cell| lookup(&cell.borrow()))
+        .or_else(|| PROGRAM_FUNCTIONAL_RESULTS.with(|cell| lookup(&cell.borrow())))
 }
 
 /// How a generic method's return type mentions the variable its parameters

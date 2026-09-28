@@ -785,6 +785,7 @@ impl Parser<'_> {
             }
         }
         classes.extend(synthesized);
+        crate::ast::keep_unit_functional_results();
         crate::ast::set_unit_functional_results(std::collections::HashMap::new());
         CompilationUnit { imports, classes }
     }

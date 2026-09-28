@@ -26189,7 +26189,13 @@ fn resolve_virtual<'run>(
     // erased descriptor (`compareTo(Object)`), but the class holds
     // the specific one (`compareTo(Card)`). Match by name and
     // argument count when the exact descriptor is not present.
-    if found.is_none() {
+    //
+    // Never for `equals(Object)`: Object's method is not generic, so there is
+    // no erasure to bridge, and `boolean equals(Point p)` — the classic
+    // OVERLOAD that fails to override — is exactly what a JDK does NOT call.
+    // Matched by arity it answered `list.contains`, `indexOf`,
+    // `Objects.equals` and `o.equals(x)` through an `Object`.
+    if found.is_none() && !(method_name == "equals" && descriptor == "(Ljava/lang/Object;)Z") {
         let want_args = descriptor_arg_count(descriptor);
         let mut current = classes.get(instance_class);
         let mut steps = 0usize;

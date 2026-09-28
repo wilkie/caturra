@@ -7468,6 +7468,74 @@ Pinned by `the_runtime_failures_read_like_the_jdks`,
 `a_trace_names_the_programs_calls_not_the_bundled_librarys` and
 `stricter_a_null_literal_to_a_bounded_collections_method`.
 
+### A chain is typed once per link (2026-09-28)
+
+A gate run reported one Code.org starter where "the compiler did not
+finish" within 120 seconds. Timing every starter found it alone: 86 seconds
+for a level whose other files took milliseconds, all of it one statement — a
+28-call fluent chain on `super` (`super.paintLineSegment(4).paintPosition(5,
+2)…`). Doubling at every link, it predates this session.
+
+Two places typed each receiver twice, and typing a receiver types ITS
+receiver, so the cost was 2^n:
+
+- codegen's `type_of` asked for the receiver's type at the reflective
+  intercept (`Method.invoke`, `Constructor.newInstance`) for EVERY call, then
+  again on the main path — now only for those two names;
+- the lambda pass's `static_type_of` read a call four ways as match guards
+  (`if f(..).is_some() => f(..)`), each asking twice — now each once, in the
+  same order, before the match.
+
+A scaling probe over thirteen nesting shapes (argument nesting, ternaries,
+concatenation, casts, string and builder chains, nested `List.of` and
+`.get(0)`, stream and `Optional` pipelines, chains inside lambda bodies) then
+found one more: `List.of(List.of(…))` typed a lone argument twice. All are
+flat to 24 levels now. The student level compiles in 0.03 seconds.
+
+Pinned by `a_long_chain_compiles_in_linear_time`, whose chains would not
+finish at 2^n.
+
+### A third grab-bag, and a generic method over a program's interface (2026-09-28)
+
+Sixteen hand-written programs, each mixing several rare-but-legal features
+(interface static and private methods, `Outer<T>.Inner`, labeled continue
+through `finally`, constructor-time virtual calls, the `Integer` cache,
+string-switch hash collisions, compound narrowing, array covariance, varargs
+edge cases, evaluation order, a visitor), agreed with a JDK on fourteen:
+
+- **An `equals` OVERLOAD answered as an override.** `boolean equals(P o)` —
+  the textbook mistake, which does not override `equals(Object)` — was what
+  `list.contains`, `indexOf`, `remove`, `HashSet`, `Objects.equals` and an
+  `Object`-typed `o.equals(x)` ran. The VM's last-resort dispatch, which
+  stands in for an erasure bridge (`compareTo(Object)` reaching
+  `compareTo(Card)`), matches by name and argument count; `Object.equals` is
+  not generic, so it never needs one, and it is now excluded.
+- **A generic method's variable pinned through the program's own
+  interface** was `Object`, in four ways:
+  - a VALUE of a program's functional interface (`V<String> v` handed to
+    `<R> R run(V<R> v)`) — only a lambda written at the call was read. The
+    per-file registry of what each interface's method answers now lasts the
+    whole compilation, and `functional_value_produces` reads it;
+  - a class that IMPLEMENTS the interface (`IntV implements V<Integer>`, an
+    anonymous `new V<Integer>() {…}`, a generic `Sq<T> implements V<T>`) —
+    read through what it wrote on the interface (`generic_supertype_args`);
+  - a lambda whose body uses its parameter, when the interface declares that
+    parameter concretely (`R num(String n)`): nothing is unwrapped into it,
+    so the lambda's answer was never typed;
+  - a non-functional interface parameter (`Visitor<R>`, two methods) given
+    an implementing class — the argument is now viewed AS the parameter's
+    type before its argument is read (`viewed_as_supertype`).
+
+Two class-file defects surfaced on the way, both invisible to caturra's VM
+and both refused by a real JVM: every local and return of a reference type
+not on a hand-kept list (a user class, a generic, a wrapper — 44 kinds) was
+written with `istore`/`iload`/`ireturn`, and a lambda class listed its
+interface twice. The first now follows `JType::is_reference`, which is exact.
+
+Pinned by `an_equals_overload_is_not_an_override`,
+`a_method_variable_pinned_through_the_programs_own_interface` and the codegen
+test `a_user_object_is_stored_loaded_and_returned_as_a_reference`.
+
 ### A catch after a caught initializer failure (2026-09-28)
 
 Found while pinning the trace lines below, by a try-with-resources that

@@ -183,7 +183,12 @@ fn emit_class(
                 table.class_id(interface).is_some(),
             )),
         );
-        class.interfaces.push(index);
+        // Once each: a lambda class named its interface in its declaration
+        // AND as its anonymous supertype, and a class file listing one
+        // interface twice is a JVM's ClassFormatError.
+        if !class.interfaces.contains(&index) {
+            class.interfaces.push(index);
+        }
     }
     {
         let mut flags = class.access_flags.0;
@@ -8834,16 +8839,116 @@ fn lambda_produces(arg: JType, table: &MethodTable) -> Option<JType> {
 /// first thing anyone does with one — produced a stream of nothing, and the
 /// operation after it could not be typed.
 fn functional_value_produces(arg: JType, table: &MethodTable) -> Option<JType> {
+    // A class that IMPLEMENTS a program's functional interface — `IntV
+    // implements V<Integer>`, an anonymous `new V<Integer>() {…}`, a generic
+    // `Sq<T> implements V<T>` — answers through what it wrote on that
+    // interface, with its own arguments put in.
+    if let JType::Object(class) | JType::Generic { class, .. } = arg
+        && let Some(produced) = implemented_functional_result(arg, class, table)
+    {
+        return Some(produced);
+    }
     let JType::Generic { class, arg, rest } = arg else {
         return None;
     };
     let name = table.class_name(class);
     // The interfaces are registered under caturra's `__`-prefixed spellings.
     let simple = name.strip_prefix("__").unwrap_or(name);
-    let arity = crate::ast::functional_result_arity(simple)?;
-    let last = u8::try_from(arity.saturating_sub(1)).ok()?;
-    let produced = table.type_arg(arg, rest, last)?;
+    let position = match crate::ast::functional_result_arity(simple) {
+        Some(arity) => arity.saturating_sub(1),
+        // A PROGRAM's own functional interface (`interface V<R> { R get(); }`)
+        // is registered by its simple name with the position of the argument
+        // its method returns. A `V<String>` VALUE handed to `<R> R open(V<R>
+        // v)` answers through that argument; only a lambda written AT the
+        // call was read, so the call was typed `Object`.
+        None => {
+            let simple = simple.rsplit(['$', '.']).next().unwrap_or(simple);
+            let argc = (0..=u8::MAX)
+                .take_while(|index| table.type_arg(arg, rest, *index).is_some())
+                .count();
+            crate::ast::functional_result_position(simple, argc)?
+        }
+    };
+    let produced = table.type_arg(arg, rest, u8::try_from(position).ok()?)?;
     Some(elem_value_type(produced, table))
+}
+
+/// `value` seen as its parameterized supertype `sup`: a class that
+/// implements `Visitor<Integer>` (or `Sq<T> implements V<T>` on a
+/// `Sq<String>`) viewed as the `Visitor<Integer>` it is. `None` when it is
+/// `sup` itself, or not below it, or wrote no arguments there.
+fn viewed_as_supertype(value: JType, sup: ClassId, table: &MethodTable) -> Option<JType> {
+    let (class, own_arg, own_rest) = match value {
+        JType::Object(class) => (class, None, NO_TYPE_ARGS),
+        JType::Generic { class, arg, rest } => (class, Some(arg), rest),
+        _ => return None,
+    };
+    if class == sup || !table.is_subtype(class, sup) {
+        return None;
+    }
+    let written: Vec<ElemType> = table
+        .generic_supertype_args(class, sup)?
+        .into_iter()
+        .map(|elem| match own_arg {
+            Some(first) => table.substitute_deep(elem, first, own_rest),
+            None => elem,
+        })
+        .collect();
+    let (first, rest) = written.split_first()?;
+    Some(JType::Generic {
+        class: sup,
+        arg: *first,
+        rest: table.intern_type_args(rest),
+    })
+}
+
+/// The result a class answers through the program's own functional interface
+/// it implements (see `functional_value_produces`). `None` for the interface
+/// itself, which answers through its own arguments.
+fn implemented_functional_result(value: JType, class: ClassId, table: &MethodTable) -> Option<JType> {
+    let (own_arg, own_rest) = match value {
+        JType::Generic { arg, rest, .. } => (Some(arg), rest),
+        _ => (None, NO_TYPE_ARGS),
+    };
+    let info = table.info_by_id(class)?;
+    if info.is_interface {
+        return None;
+    }
+    let mut queue: Vec<ClassId> = info.interfaces.clone();
+    queue.extend(info.superclass);
+    let mut seen = 0usize;
+    while let Some(sup) = queue.pop() {
+        seen += 1;
+        if seen > table.class_names.len() + 1 {
+            return None;
+        }
+        let Some(sup_info) = table.info_by_id(sup) else {
+            continue;
+        };
+        queue.extend(sup_info.interfaces.iter().copied());
+        queue.extend(sup_info.superclass);
+        if !sup_info.is_interface {
+            continue;
+        }
+        let name = table.class_name(sup);
+        let simple = name.rsplit(['$', '.']).next().unwrap_or(name);
+        let Some(written) = table.generic_supertype_args(class, sup) else {
+            continue;
+        };
+        let Some(position) = crate::ast::functional_result_position(simple, written.len()) else {
+            continue;
+        };
+        let result = *written.get(position)?;
+        let result = match own_arg {
+            Some(first) => table.substitute_deep(result, first, own_rest),
+            None => result,
+        };
+        if matches!(result, ElemType::TypeVar(_)) {
+            return None;
+        }
+        return Some(elem_value_type(result, table));
+    }
+    None
 }
 
 /// What a functional interface VALUE of a generic type answers, by the
@@ -8951,7 +9056,10 @@ fn join_sources(
             // and left the answer on the synthesized class, which is the only
             // thing that still knows it here — the same field a mapped
             // stream's element is read from.
-            InferSource::LambdaResult(_) => lambda_produces(arg, table)?,
+            // ...or, for a functional VALUE rather than a lambda written at the
+            // call, what its declared type says it answers.
+            InferSource::LambdaResult(_) => lambda_produces(arg, table)
+                .or_else(|| functional_value_produces(arg, table))?,
             InferSource::ElementResult(_, position) => {
                 element_result(TypeArgs::of(arg).first?, position, table)?
             }
@@ -9074,6 +9182,39 @@ fn inferred_return(sig: &MethodSig, arg_types: &[JType], table: &MethodTable) ->
     let Some(plan) = &sig.ret_infer else {
         return sig.ret;
     };
+    // An argument that IMPLEMENTS the parameter's generic type rather than
+    // being one — `accept(new Visitor<Integer>() {…})` for a `Visitor<R>`
+    // parameter — has no type argument of its own to read; it is read AS the
+    // parameter's type, through what its class wrote there.
+    //
+    // Only where the plan reads the argument's TYPE ARGUMENTS: an argument
+    // that IS the variable (`<T extends Comparable<T>> T max(T a, T b)`,
+    // whose erased parameter is `Comparable`) is read as it stands.
+    let reads_arguments = |index: usize| {
+        plan.sources.iter().chain(&plan.second).any(|source| {
+            matches!(source,
+                crate::ast::InferSource::Element(at)
+                | crate::ast::InferSource::Slot(at, _)
+                | crate::ast::InferSource::ElementResult(at, _) if *at == index)
+        })
+    };
+    let viewed: Vec<JType> = arg_types
+        .iter()
+        .zip(0..)
+        .map(|(&arg, index)| {
+            sig.params
+                .get(index)
+                .filter(|_| reads_arguments(index))
+                .and_then(|param| match param {
+                    JType::Object(sup) | JType::Generic { class: sup, .. } => {
+                        viewed_as_supertype(arg, *sup, table)
+                    }
+                    _ => None,
+                })
+                .unwrap_or(arg)
+        })
+        .collect();
+    let arg_types = viewed.as_slice();
     let Some(joined) = join_sources(&plan.sources, arg_types, table) else {
         return sig.ret;
     };
@@ -30218,7 +30359,9 @@ impl BodyGen<'_> {
                     JType::Double => op::DRETURN,
                     JType::Long => op::LRETURN,
                     JType::Float => op::FRETURN,
-                    JType::Str | JType::Null => op::ARETURN,
+                    // Any reference, not only a String: a method returning a
+                    // user object ended in `ireturn`.
+                    t if t.is_reference() => op::ARETURN,
                     _ => op::IRETURN,
                 };
                 self.code.push_op(opcode, 0);
@@ -34042,7 +34185,8 @@ impl BodyGen<'_> {
         let arg = match source {
             InferSource::Direct(_) => arg,
             InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
-            InferSource::LambdaResult(_) => lambda_produces(arg, self.table)?,
+            InferSource::LambdaResult(_) => lambda_produces(arg, self.table)
+                .or_else(|| functional_value_produces(arg, self.table))?,
             InferSource::ElementResult(_, position) => {
                 element_result(TypeArgs::of(arg).first?, position, self.table)?
             }
@@ -44916,7 +45060,13 @@ impl BodyGen<'_> {
                 // these, `type_of` said "unknown" for a call the emitter types
                 // fine, and a legal program that merely PASSED an `invoke`
                 // result to a method was refused.
-                if let Some(receiver) = receiver.as_deref() {
+                //
+                // Asked only for those two names: typing the receiver here for
+                // EVERY call typed it twice per link of a chain (again below),
+                // which is 2^n — a student's 28-call fluent chain took 17s.
+                if matches!(method.as_str(), "invoke" | "newInstance")
+                    && let Some(receiver) = receiver.as_deref()
+                {
                     let receiver_ty = self.type_of(receiver);
                     if (receiver_ty == JType::Method && method == "invoke")
                         || (receiver_ty == JType::Constructor && method == "newInstance")
@@ -48846,8 +48996,11 @@ impl BodyGen<'_> {
         // the famous varargs gotcha. The emission path has always known this;
         // joining the arguments without it made `type_of` spread a primitive
         // array and disagree.
-        if let [single] = args {
-            match self.type_of(single) {
+        // Each argument typed ONCE: typing a lone one here and again in the
+        // join below doubled the work per level of `List.of(List.of(…))`.
+        let arg_types: Vec<JType> = args.iter().map(|arg| self.type_of(arg)).collect();
+        if let [single] = arg_types.as_slice() {
+            match *single {
                 JType::Array { elem, dims: 1 } if elem.base_type().is_reference() => return elem,
                 array @ JType::Array { .. } => {
                     return ElemType::Nested {
@@ -48860,8 +49013,8 @@ impl BodyGen<'_> {
         }
         let mut scalar = None;
         let mut mixed = false;
-        for arg in args {
-            let each = value_elem_of(self.type_of(arg), self.table);
+        for &arg_ty in &arg_types {
+            let each = value_elem_of(arg_ty, self.table);
             match (scalar, each) {
                 (None, found) => scalar = found,
                 (Some(seen), Some(found)) if seen != found => {
@@ -50488,58 +50641,11 @@ impl BodyGen<'_> {
             JType::Double => (op::DLOAD, op::DLOAD_0),
             JType::Long => (op::LLOAD, op::LLOAD_0),
             JType::Float => (op::FLOAD, op::FLOAD_0),
-            JType::Str
-            | JType::Null
-            | JType::Array { .. }
-            | JType::Scanner
-            | JType::File
-            | JType::Writer(_)
-            | JType::PrintStream
-            | JType::ByteStream
-            | JType::LocalDate
-            | JType::LocalTime
-            | JType::LocalDateTime
-            | JType::Duration
-            | JType::Period
-            | JType::ChronoUnit
-            | JType::ChronoField
-            | JType::TemporalAdjuster
-            | JType::IsoEra
-            | JType::TemporalQuery
-            | JType::Chronology
-            | JType::TextStyle
-            | JType::FormatStyle
-            | JType::Year
-            | JType::YearMonth
-            | JType::MonthDay
-            | JType::ValueRange
-            | JType::DateFormat
-            | JType::DayOfWeek
-            | JType::Month
-            | JType::List { .. }
-            | JType::Stack(_)
-            | JType::Map { .. }
-            | JType::Set { .. }
-            | JType::Collection(_)
-            | JType::EntrySet { .. }
-            | JType::MapEntry { .. }
-            | JType::BigInteger
-            | JType::BigDecimal
-            | JType::RoundingMode
-            | JType::MathContext
-            | JType::DecimalFormat
-            | JType::NumberFormat
-            | JType::ParsePosition
-            | JType::FieldPosition
-            | JType::StringTokenizer
-            | JType::Uuid
-            | JType::Base64Encoder
-            | JType::Base64Decoder
-            | JType::BitSet
-            | JType::StringWriter
-            | JType::BufferedWriter
-            | JType::WriterFace
-            | JType::Exception(_) => (op::ALOAD, op::ALOAD_0),
+            // Every REFERENCE, by the one exact rule. This was a list, and a
+            // type missing from it — a user class, a generic, a wrapper, a
+            // reader, 44 kinds in all — was written with `iload`: the
+            // VM does not mind, a JVM's verifier refuses the class.
+            t if t.is_reference() => (op::ALOAD, op::ALOAD_0),
             _ => (op::ILOAD, op::ILOAD_0),
         };
         self.local_op(base, short_base, slot);
@@ -50551,55 +50657,11 @@ impl BodyGen<'_> {
             JType::Double => (op::DSTORE, op::DSTORE_0),
             JType::Long => (op::LSTORE, op::LSTORE_0),
             JType::Float => (op::FSTORE, op::FSTORE_0),
-            JType::Str
-            | JType::Null
-            | JType::Array { .. }
-            | JType::Scanner
-            | JType::File
-            | JType::Writer(_)
-            | JType::PrintStream
-            | JType::ByteStream
-            | JType::LocalDate
-            | JType::LocalTime
-            | JType::LocalDateTime
-            | JType::Duration
-            | JType::Period
-            | JType::ChronoUnit
-            | JType::ChronoField
-            | JType::TemporalAdjuster
-            | JType::IsoEra
-            | JType::TemporalQuery
-            | JType::Chronology
-            | JType::TextStyle
-            | JType::FormatStyle
-            | JType::ValueRange
-            | JType::DateFormat
-            | JType::DayOfWeek
-            | JType::Month
-            | JType::List { .. }
-            | JType::Stack(_)
-            | JType::Map { .. }
-            | JType::Set { .. }
-            | JType::Collection(_)
-            | JType::EntrySet { .. }
-            | JType::MapEntry { .. }
-            | JType::BigInteger
-            | JType::BigDecimal
-            | JType::RoundingMode
-            | JType::MathContext
-            | JType::DecimalFormat
-            | JType::NumberFormat
-            | JType::ParsePosition
-            | JType::FieldPosition
-            | JType::StringTokenizer
-            | JType::Uuid
-            | JType::Base64Encoder
-            | JType::Base64Decoder
-            | JType::BitSet
-            | JType::StringWriter
-            | JType::BufferedWriter
-            | JType::WriterFace
-            | JType::Exception(_) => (op::ASTORE, op::ASTORE_0),
+            // Every REFERENCE, by the one exact rule. This was a list, and a
+            // type missing from it — a user class, a generic, a wrapper, a
+            // reader, 44 kinds in all — was written with `istore`: the
+            // VM does not mind, a JVM's verifier refuses the class.
+            t if t.is_reference() => (op::ASTORE, op::ASTORE_0),
             _ => (op::ISTORE, op::ISTORE_0),
         };
         self.local_op(base, short_base, slot);
@@ -51895,6 +51957,36 @@ mod tests {
                 _ => pc += 1,
             }
         }
+    }
+
+    /// A local or a return of ANY reference type uses the reference opcodes.
+    /// The choice was a list of kinds, and a user class (and 43 other
+    /// reference kinds) fell through to `istore`/`iload`/`ireturn` — which
+    /// caturra's VM runs and a JVM's verifier refuses.
+    #[test]
+    fn a_user_object_is_stored_loaded_and_returned_as_a_reference() {
+        let classes = generate_ok(
+            r#"
+            class C {
+                static C make() {
+                    C c = new C();
+                    return c;
+                }
+            }
+            "#,
+        );
+        let class = &classes[0].class_file;
+        let pool = &class.constant_pool;
+        let make = class
+            .methods
+            .iter()
+            .find(|m| pool.get_utf8(m.name_index) == Some("make"))
+            .expect("make is emitted");
+        let code = read_code_attribute(&make.attributes[0].info).expect("valid Code attribute");
+        // new, dup, invokespecial <init> (7 bytes), then the store.
+        assert_eq!(code.code[7], op::ASTORE_0);
+        assert_eq!(code.code[8], op::ALOAD_0);
+        assert_eq!(code.code[9], op::ARETURN);
     }
 
     #[test]

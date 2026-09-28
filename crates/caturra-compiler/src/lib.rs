@@ -642,6 +642,7 @@ fn number_defaults(units: &mut [(String, ast::CompilationUnit)]) {
 #[must_use]
 #[allow(clippy::too_many_lines)] // the bundle-injection pipeline
 pub fn compile(sources: &[SourceFile]) -> Compilation {
+    crate::ast::clear_program_functional_results();
     let mut compilation = Compilation::default();
     let mut seen: HashMap<String, String> = HashMap::new();
     let mut units = Vec::new();
