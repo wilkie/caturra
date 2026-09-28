@@ -17,6 +17,7 @@
 use std::collections::HashMap;
 
 use crate::ast::{ClassDecl, CompilationUnit, Expr, MethodDecl, Param, Stmt, TypeRef};
+use crate::diagnostics::SourceSpan;
 
 /// Add the bridge methods every generic override needs.
 pub fn add_bridge_methods(units: &mut [(String, CompilationUnit)]) {
@@ -87,7 +88,7 @@ fn bridges_for(class: &ClassDecl, classes: &HashMap<String, ClassDecl>) -> Vec<M
         if already_declared {
             continue;
         }
-        bridges.push(build_bridge(method, &inherited));
+        bridges.push(build_bridge(method, &inherited, class.span));
     }
     bridges
 }
@@ -155,6 +156,10 @@ fn bundled_functional_signature(
             break;
         };
         let Some(parent) = classes.get(&name) else {
+            // Not a program class: an ANONYMOUS class records the one type it
+            // names as its superclass until codegen learns whether that is an
+            // interface, so `new Comparator<String>() {…}` is found here.
+            interfaces.push(name);
             break;
         };
         interfaces.extend(parent.interfaces.iter().cloned());
@@ -201,6 +206,16 @@ fn implements_library_interface(
     classes: &HashMap<String, ClassDecl>,
 ) -> bool {
     let mut queue: Vec<String> = class.interfaces.clone();
+    // An anonymous class's one supertype is recorded as its superclass (see
+    // `bundled_functional_signature`); a library name there may be the
+    // interface.
+    queue.extend(
+        class
+            .superclass
+            .iter()
+            .filter(|name| !classes.contains_key(name.as_str()))
+            .cloned(),
+    );
     let mut steps = 0usize;
     while let Some(name) = queue.pop() {
         steps += 1;
@@ -335,8 +350,11 @@ fn is_erased_variable(key: &str) -> bool {
 
 /// `void set(Object t) { set((String) t); }` — cast each narrowed parameter
 /// and delegate to the real override.
-fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
-    let zero = method.span;
+/// javac positions a bridge at its CLASS's declaration — for an anonymous
+/// class the `new` that declares it — which is the line the bridge's frame
+/// names in a trace through it.
+fn build_bridge(method: &MethodDecl, inherited: &MethodDecl, class_span: SourceSpan) -> MethodDecl {
+    let zero = class_span;
     let params: Vec<Param> = inherited
         .params
         .iter()
@@ -370,6 +388,7 @@ fn build_bridge(method: &MethodDecl, inherited: &MethodDecl) -> MethodDecl {
         args,
         span: zero,
         type_args: Vec::new(),
+        paren_line: 0,
     };
     let body = if matches!(inherited.return_type, TypeRef::Void) {
         vec![Stmt::Expr(call)]

@@ -7468,6 +7468,72 @@ Pinned by `the_runtime_failures_read_like_the_jdks`,
 `a_trace_names_the_programs_calls_not_the_bundled_librarys` and
 `stricter_a_null_literal_to_a_bounded_collections_method`.
 
+### A catch after a caught initializer failure (2026-09-28)
+
+Found while pinning the trace lines below, by a try-with-resources that
+followed a caught `ExceptionInInitializerError` in the same method: its
+`close()` exception escaped instead of being suppressed. The cause was wider.
+When a `new`/`getstatic` triggers a `<clinit>`, the triggering frame is saved
+with `pc_reexecutes` — its pc points AT the instruction to re-run, so the
+unwinder searches there instead of one instruction back. Only a normal return
+cleared it. If the initializer THREW and that frame caught the error, the flag
+stayed, and every later exception unwinding into the frame was searched one
+instruction too late — just past a `try` range that ends with the call. After
+a caught initializer failure, `try { boom(); } catch (…)` did not catch. A
+handler now clears the flag, as a return does.
+
+Pinned by `a_caught_initializer_failure_leaves_later_catches_working`.
+
+### Which line a frame names (2026-09-28)
+
+The fifty-failure sweep above wrote each failing statement on ONE line, so it
+could not see what a frame names when a statement spans several — a builder
+chain, a stream pipeline, arguments wrapped under a long call. Forty programs
+written that way against a JDK found caturra naming the statement's FIRST line
+wherever javac names another. javac's LineNumberTable is finer than one entry
+per statement, and caturra now writes the same entries:
+
+- **A call marks the line of its `(`** just before the invoke instruction
+  (`Gen.visitApply`'s `statBegin(tree.pos)`), and nothing reverts it: an
+  argument's call marks its own line, then the enclosing call marks its own
+  again. A stream pipeline's frame names the terminal operation's line.
+  `Expr::Call` and `Expr::SuperMethodCall` keep the `(` line (`paren_line`);
+  the code builder holds the current call's line and every invoke marks it.
+  A `new` and a string concatenation mark nothing (javac's constructor
+  invocation has no `statBegin`, and concatenation is an `invokedynamic`), so
+  the builder calls standing in for them run with no call line.
+- **Boxing and unboxing** are calls javac's Lower writes at the CONVERTED
+  expression's position, so `int v =` / `n;` names the `n` line — the line a
+  NullPointerException from unboxing names.
+- **A loop test** marks its condition's line (`genLoop`): a `for` loop's test
+  and each update, and a `do-while`'s `while (…)` line rather than the last
+  line its body ran. **A conditional** marks the condition, then each branch.
+- **A for-each** is written by Lower at the ITERABLE's position — `iterator()`,
+  `hasNext()`, `next()`, an array's `length` — so a null source names that
+  line.
+- **A field initializer** runs at the line of the field's NAME (javac's
+  position for the declaration); it had no line at all, so `<init>` and
+  `<clinit>` frames printed `(Main.java)`.
+- **A constructor's prologue** had no line: an explicit `this(…)`/`super(…)`
+  is the first statement and marks its line; an implicit `super()` marks the
+  constructor's (a default constructor's, its class's), so a trace through
+  a throwing superclass constructor names it.
+- **A try-with-resources `close()`** runs at the try BODY's closing brace
+  (javac's `make_at(TreeInfo.endPos(block))`) when the body completed, and at
+  the `try` keyword's line when it runs because the body threw; a refusal of
+  the resource's type is still reported at the resource.
+- **A bridge frame names its class's declaration**, not the method's line.
+  And an ANONYMOUS `new Comparator<String>() {…}` had no bridge, so its trace
+  lacked the second `Main$1.compare` frame javac's shows: at bridge time an
+  anonymous class records the one type it names as its SUPERCLASS (whether
+  that is an interface is decided later), and both library-interface lookups
+  read only `interfaces`.
+
+Casts, `new`, arithmetic and array access mark nothing in javac, and nothing
+here either. Pinned by `a_frame_names_the_line_javac_marks`, whose
+`differential_test_trace!` drops the JDK's `at java.base/…` frames before
+comparing, since caturra deliberately models no library frame.
+
 ### Reading input by pattern (2026-08-22)
 
 Two more sweeps came back almost empty, which is worth recording as much as a
@@ -16486,6 +16552,53 @@ Pinned as `a_local_class_in_a_switch_arm`,
 `a_raw_creation_answers_the_erasure`, `a_diamond_that_cannot_be_inferred`,
 `a_diamond_argument_that_cannot_be_inferred` and
 `a_second_type_argument_is_invariant`.
+
+### A diamond whose target is a supertype (2026-09-28)
+
+Found by a trace probe that never got as far as its trace:
+`Comparable<Box<String>> b = new Box<>(null)` for a `class Box<T> implements
+Comparable<Box<T>>` was refused. Eight programs around it — a diamond whose
+variables only a PARAMETERIZED SUPERTYPE target fixes — were refused in every
+position: a declaration, a return, a user method's argument, an element
+`add`ed to a collection.
+
+- **The written supertype argument kept its variable's NAME.** A class's
+  `supertype_args` record what the source wrote, so `Box<T>` there is the
+  name `T`, not the position-indexed sentinel a field or return type is
+  erased to — and `T` resolves to nothing, so the argument read as a bare
+  `Object`. Even written out, `Comparable<Box<String>> c = boxOfString` was
+  "Box<String> cannot be converted to Comparable<Box<String>>".
+  `generic_supertype_arg` now translates the class's own names by position
+  (only when the supertype is written on the class itself — on an ancestor
+  they are the ancestor's), and the parameterized-subtype conversion
+  substitutes the value's own arguments into it at any depth
+  (`substitute_deep`), so `P<A, B> implements Supplier<B>` is a `Supplier`
+  of its SECOND argument too. Every written argument counts, not only a
+  lone one (`generic_supertype_args`): `Swap<A, B> implements Pairish<B, A>`
+  makes a `Swap<Integer, String>` a `Pairish<String, Integer>` and nothing
+  else.
+- **A functional interface is its bundled erasure** (`__Supplier`), which
+  keeps only the result argument; the written `Supplier<T>` is matched by
+  the name the source used and read at its last argument.
+- **The target decides what a `null` does not.** javac infers a diamond's
+  variables from the target — through what the class wrote on that
+  supertype — and then checks the arguments against them.
+  `diamond_fits_supertype` does the same (`unify_type_arg` maps the target's
+  argument back onto the class's variables; each argument that pins one must
+  widen to it, a `null` pins nothing, and an argument that is itself a
+  diamond or a factory takes the variable as ITS target —
+  `new Holder<>(new Holder<>(null))`), and is consulted wherever a poly
+  expression adopts its target: a declaration, `expr_toward`, a user
+  method's overload retry, and — new — a builtin collection method's, which
+  had no poly retry at all.
+- **The refusal is javac's**: a supertype target that contradicts the
+  arguments is "cannot infer type arguments for Holder<>", as the same-class
+  target already was.
+
+Pinned by `a_diamond_takes_its_variables_through_a_supertype`,
+`reject_a_diamond_its_supertype_target_contradicts`,
+`reject_a_diamond_argument_its_supertype_parameter_contradicts` and
+`reject_a_swapped_supertype_argument`.
 
 ### Where a syntax fuzz still disagreed (2026-09-26)
 

@@ -609,6 +609,7 @@ fn thrown_of_expr(expr: &Expr, handlers: &mut Vec<Vec<Exc>>, ctx: &mut Ctx) -> T
             method,
             args,
             span,
+            ..
         } => {
             let mut out = ThrownSet::default();
             for a in args {

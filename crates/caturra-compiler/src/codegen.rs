@@ -2988,6 +2988,132 @@ impl MethodTable {
             .copied()
     }
 
+    /// `elem` with every type variable replaced by a receiver's argument —
+    /// at ANY depth, so the `Box<T>` a `class Box<T> implements
+    /// Comparable<Box<T>>` wrote reads as `Box<String>` on a `Box<String>`.
+    /// A variable the receiver does not carry (a raw use) stays.
+    fn substitute_deep(&self, elem: ElemType, first: ElemType, rest: TypeArgsId) -> ElemType {
+        self.substitute_deep_at(elem, first, rest, 0)
+    }
+
+    /// The other direction: which of a class's own variables a supertype
+    /// argument it WROTE (`Box<T>` in `implements Comparable<Box<T>>`) fixes,
+    /// given the argument a target puts there (`Box<String>`). Fills
+    /// `bindings` by the variable's position; false when the two cannot be
+    /// the same type, or bind one variable twice differently.
+    /// `unify_type_arg` over every argument `sub` wrote for `sup`, against
+    /// the target's at the same position.
+    fn unify_supertype(
+        &self,
+        sub: ClassId,
+        sup: ClassId,
+        to_arg: ElemType,
+        to_rest: TypeArgsId,
+        bindings: &mut [Option<ElemType>; 2],
+    ) -> bool {
+        let Some(written) = self.generic_supertype_args(sub, sup) else {
+            return false;
+        };
+        written.iter().zip(0..=u8::MAX).all(|(written, at)| {
+            self.type_arg(to_arg, to_rest, at)
+                .is_some_and(|target| self.unify_type_arg(*written, target, bindings))
+        })
+    }
+
+    fn unify_type_arg(
+        &self,
+        written: ElemType,
+        target: ElemType,
+        bindings: &mut [Option<ElemType>; 2],
+    ) -> bool {
+        match written {
+            ElemType::TypeVar(index) => {
+                let Some(slot) = bindings.get_mut(usize::from(index)) else {
+                    return false;
+                };
+                match slot {
+                    Some(bound) => *bound == target,
+                    None => {
+                        *slot = Some(target);
+                        true
+                    }
+                }
+            }
+            ElemType::Nested { inner, .. } => {
+                let ElemType::Nested { inner: to_inner, .. } = target else {
+                    return false;
+                };
+                match (self.nested_type(inner), self.nested_type(to_inner)) {
+                    (
+                        JType::Generic {
+                            class,
+                            arg,
+                            rest,
+                        },
+                        JType::Generic {
+                            class: to_class,
+                            arg: to_arg,
+                            rest: to_rest,
+                        },
+                    ) if class == to_class => (0..=u8::MAX)
+                        .map(|index| (self.type_arg(arg, rest, index), self.type_arg(to_arg, to_rest, index)))
+                        .take_while(|pair| *pair != (None, None))
+                        .all(|pair| match pair {
+                            (Some(from), Some(to)) => self.unify_type_arg(from, to, bindings),
+                            _ => false,
+                        }),
+                    (written, to) => written == to,
+                }
+            }
+            other => other == target,
+        }
+    }
+
+    fn substitute_deep_at(
+        &self,
+        elem: ElemType,
+        first: ElemType,
+        rest: TypeArgsId,
+        depth: u8,
+    ) -> ElemType {
+        match elem {
+            ElemType::TypeVar(index) => self.type_arg(first, rest, index).unwrap_or(elem),
+            // Nesting is bounded by what a program writes; the bound only
+            // guards against a self-referential intern.
+            ElemType::Nested { inner, read } if depth < 16 => {
+                let ty = self.nested_type(inner);
+                let deep = |e| self.substitute_deep_at(e, first, rest, depth + 1);
+                let substituted = match substitute_member_elems(ty, deep) {
+                    JType::Generic {
+                        class,
+                        arg,
+                        rest: own_rest,
+                    } if own_rest != NO_TYPE_ARGS => {
+                        let tail: Vec<ElemType> = (1..=u8::MAX)
+                            .map_while(|index| self.type_arg(arg, own_rest, index))
+                            .map(deep)
+                            .collect();
+                        JType::Generic {
+                            class,
+                            arg,
+                            rest: self.intern_type_args(&tail),
+                        }
+                    }
+                    other => other,
+                };
+                if substituted == ty {
+                    elem
+                } else {
+                    ElemType::Nested {
+                        inner: self.intern_nested(substituted),
+                        read,
+                    }
+                }
+            }
+            other => other,
+        }
+    }
+
     /// The inner type an `ElemType::Nested(id)` denotes.
     fn nested_type(&self, id: u32) -> JType {
         self.nested
@@ -3934,6 +4060,16 @@ impl MethodTable {
     /// record it. Walks the extends/implements chain, so an indirect subclass
     /// answers too.
     fn generic_supertype_arg(&self, sub: ClassId, sup: ClassId) -> Option<ElemType> {
+        match self.generic_supertype_args(sub, sup)?.as_slice() {
+            [only] => Some(*only),
+            _ => None,
+        }
+    }
+
+    /// Every type argument `sub` writes for the parameterized supertype `sup`,
+    /// by `sup`'s positions — `class Swap<A, B> implements Pairish<B, A>`
+    /// answers `[B, A]` as `sub`'s own variables. `None` as for the singular.
+    fn generic_supertype_args(&self, sub: ClassId, sup: ClassId) -> Option<Vec<ElemType>> {
         let sup_name = self.class_name(sup).to_owned();
         // An ENUM's own two supertype arguments are ITSELF: `enum Kind` is an
         // `Enum<Kind>`, which is a `Comparable<Kind>`. Neither is written in
@@ -3943,7 +4079,7 @@ impl MethodTable {
         if matches!(sup_name.as_str(), "Comparable" | "Enum")
             && self.info_by_id(sub).is_some_and(|info| info.is_enum)
         {
-            return Some(ElemType::Object(sub));
+            return Some(vec![ElemType::Object(sub)]);
         }
         let mut queue = vec![sub];
         let mut steps = 0usize;
@@ -3955,13 +4091,38 @@ impl MethodTable {
             let Some(info) = self.info_by_id(current) else {
                 continue;
             };
+            // The supertype arguments are recorded as WRITTEN, so a variable
+            // of the class's own (`Box<T>` in `class Box<T> implements
+            // Comparable<Box<T>>`) is still its name, which resolves to
+            // nothing and read the argument as `Object`. Written on `sub`
+            // itself it is `sub`'s variable, by position; on an ancestor it
+            // would be the ancestor's.
+            let read = |arg: &TypeRef| {
+                if current == sub && !info.type_param_names.is_empty() {
+                    elem_from_type_arg(&own_type_vars(arg, &info.type_param_names), self)
+                } else {
+                    elem_from_type_arg(arg, self)
+                }
+            };
             for (name, args) in &info.supertype_args {
                 // `supertype_args` records the SOURCE spelling of the
                 // supertype; `sup_name` starts from a `ClassId`, so it comes
                 // back binary. Compare them by identity, not by string.
                 let same = *name == sup_name || self.class_id(name) == Some(sup);
-                if same && args.len() == 1 {
-                    return elem_from_type_arg(&args[0], self);
+                // A FUNCTIONAL interface is its bundled `__` erasure, which
+                // keeps only the RESULT argument (`Supplier<String>` is a
+                // `__Supplier` of `String`): the written supertype is matched
+                // by the name the source used, and read at its last argument.
+                let functional = sup_name.starts_with("__")
+                    && source_interface_name(name) == source_interface_name(&sup_name);
+                if functional {
+                    let simple = name.split('<').next().unwrap_or(name);
+                    let simple = simple.rsplit('.').next().unwrap_or(simple);
+                    let last = args.last().filter(|_| functional_result_arg(simple))?;
+                    return Some(vec![read(last)?]);
+                }
+                if same && !args.is_empty() {
+                    return args.iter().map(read).collect();
                 }
             }
             queue.extend(info.superclass);
@@ -5973,6 +6134,28 @@ fn type_arg_source_name(arg: &TypeRef) -> Option<String> {
             Some(source_interface_name(name).to_string())
         }
         _ => None,
+    }
+}
+
+/// `ty` with each of a class's own type-variable NAMES replaced by the
+/// sentinel for its position — the form a field or return type is erased to,
+/// for a type recorded as written.
+fn own_type_vars(ty: &TypeRef, names: &[String]) -> TypeRef {
+    match ty {
+        TypeRef::Named(name) => names
+            .iter()
+            .position(|own| own == name)
+            .and_then(|index| u8::try_from(index).ok())
+            .map_or_else(
+                || ty.clone(),
+                |index| TypeRef::Named(crate::parser::typevar_sentinel(index)),
+            ),
+        TypeRef::Generic { base, args } => TypeRef::Generic {
+            base: base.clone(),
+            args: args.iter().map(|arg| own_type_vars(arg, names)).collect(),
+        },
+        TypeRef::Array(inner) => TypeRef::Array(Box::new(own_type_vars(inner, names))),
+        other => other.clone(),
     }
 }
 
@@ -9245,9 +9428,19 @@ fn widens(from: JType, to: JType, table: &MethodTable) -> bool {
                     rest: to_rest,
                 },
             ) if table.is_subtype(sub, sup)
-                && match table.generic_supertype_arg(sub, sup) {
-                    Some(ElemType::TypeVar(_)) | None => from_arg == to_arg,
-                    Some(written) => written == to_arg,
+                // What the subclass wrote, with ITS OWN arguments put in —
+                // `Box<T> implements Comparable<Box<T>>` makes a `Box<String>`
+                // a `Comparable<Box<String>>`, and `P<A, B> implements
+                // Supplier<B>` a `Supplier` of its SECOND argument.
+                && match table.generic_supertype_args(sub, sup) {
+                    None => from_arg == to_arg,
+                    // A position the target never learned (NO_TYPE_ARGS) is
+                    // not held to it.
+                    Some(written) => written.iter().zip(0..=u8::MAX).all(|(written, at)| {
+                        table.type_arg(to_arg, to_rest, at).is_none_or(|wanted| {
+                            table.substitute_deep(*written, from_arg, from_rest) == wanted
+                        })
+                    }),
                 }
                 // The SAME class: every argument is invariant, not only the
                 // first — a `Pair<String, Integer>` is no `Pair<String,
@@ -12653,6 +12846,10 @@ fn emit_method(
         });
         if let Some((is_super, args, span)) = explicit {
             statements = &statements[1..];
+            // The explicit call is the constructor's first STATEMENT, and
+            // marks its line like any other — a trace through its arguments
+            // named no line at all.
+            body.code.mark_line(span.start.line);
             body.check_no_this_in_chain_args(args);
             if is_super {
                 body.emit_constructor_call_on_this(
@@ -12682,6 +12879,15 @@ fn emit_method(
                     .as_deref()
                     .unwrap_or("java/lang/Object")
             });
+            // javac positions the implicit `super()` at the constructor —
+            // a DEFAULT constructor at its class — so a trace through a
+            // throwing superclass constructor names that line.
+            let line = if decl.span.start.line > 0 {
+                decl.span.start.line
+            } else {
+                class_decl.span.start.line
+            };
+            body.code.mark_line(line);
             body.emit_constructor_call_on_this(super_name, &[], decl.span);
             statements = body.emit_pre_init(decl, statements);
             body.without_constructor_scope(|b| b.emit_instance_field_initializers(class_decl));
@@ -28878,6 +29084,7 @@ impl BodyGen<'_> {
     fn statement(&mut self, stmt: &Stmt) {
         if let Some(span) = statement_span(stmt) {
             self.code.mark_line(span.start.line);
+            self.code.last_expr_line = span.start.line;
         }
         match stmt {
             // An empty statement does nothing and holds nothing.
@@ -28924,7 +29131,12 @@ impl BodyGen<'_> {
                 cond, then, els, ..
             } => self.if_statement(cond, then, els.as_deref()),
             Stmt::While { cond, body, .. } => self.while_statement(cond, body),
-            Stmt::DoWhile { body, cond, .. } => self.do_while_statement(body, cond),
+            Stmt::DoWhile {
+                body,
+                cond,
+                cond_line,
+                ..
+            } => self.do_while_statement(body, cond, *cond_line),
             Stmt::For {
                 init,
                 cond,
@@ -30132,7 +30344,7 @@ impl BodyGen<'_> {
         self.code.bind(end);
     }
 
-    fn do_while_statement(&mut self, body: &Stmt, cond: &Expr) {
+    fn do_while_statement(&mut self, body: &Stmt, cond: &Expr, cond_line: u32) {
         let start = self.code.new_label();
         let continue_label = self.code.new_label();
         let end = self.code.new_label();
@@ -30148,6 +30360,11 @@ impl BodyGen<'_> {
         self.statement(body);
         self.loop_stack.pop();
         self.code.bind(continue_label);
+        // javac's `genLoop` marks the condition's line — for a do-while
+        // the `while (…)` line, not the last one the body ran.
+        if cond_line > 0 {
+            self.code.mark_line(cond_line);
+        }
         self.condition(cond, "do-while");
         self.code.branch(op::IFNE, start, 1);
         self.code.bind(end);
@@ -30170,6 +30387,7 @@ impl BodyGen<'_> {
         let end = self.code.new_label();
         self.code.bind(cond_label);
         if let Some(cond) = cond {
+            self.code.mark_expr_line(cond);
             self.condition(cond, "for");
             self.code.branch(op::IFEQ, end, 1);
         }
@@ -30687,7 +30905,8 @@ impl BodyGen<'_> {
         // ARGUMENTS against it, which is what the element test does here.
         let poly = mints_a_collection(init)
             || (self.last_call_inferred && matches!(init, Expr::Call { .. }));
-        poly && (self.elements_widen(init_ty, target) || self.factory_args_fit(init, target))
+        (poly && (self.elements_widen(init_ty, target) || self.factory_args_fit(init, target)))
+            || self.diamond_fits_supertype(init, target)
     }
 
     /// Whether a collection FACTORY's arguments fit the target's element types
@@ -30801,6 +31020,7 @@ impl BodyGen<'_> {
             || widens(boxed, want, self.table)
             || (mints_a_collection(expr)
                 && (self.elements_widen(ty, want) || self.factory_args_fit(expr, want)))
+            || self.diamond_fits_supertype(expr, want)
     }
 
     /// Whether a CONDITIONAL takes its type from the target instead of from
@@ -32325,6 +32545,16 @@ impl BodyGen<'_> {
                 Action::Field(field) => {
                     if let Some(init) = &field.init {
                         self.forward_ref = Some((field.order, std::rc::Rc::clone(&orders)));
+                        // The initializer runs inside `<init>`/`<clinit>` at
+                        // the line of the field's NAME — javac's position for
+                        // the declaration; a call on a later line marks its
+                        // own. A synthesized field has no name span.
+                        let line = if field.span.start.line > 0 {
+                            field.span.start.line
+                        } else {
+                            init.span().start.line
+                        };
+                        self.code.mark_line(line);
                         self.emit_field_initializer(field, init);
                         self.forward_ref = None;
                     }
@@ -33319,6 +33549,7 @@ impl BodyGen<'_> {
                 args: vec![bound],
                 span,
                 type_args: Vec::new(),
+                paren_line: 0,
             }
         } else {
             bound
@@ -33766,36 +33997,17 @@ impl BodyGen<'_> {
         sources: &[crate::ast::InferSource],
         arg_types: &[JType],
     ) -> Option<ElemType> {
-        use crate::ast::InferSource;
         let mut joined: Option<JType> = None;
         let mut saw_null = false;
         for &source in sources {
-            let (InferSource::Direct(index)
-            | InferSource::Element(index)
-            | InferSource::LambdaResult(index)
-            | InferSource::ElementResult(index, _)
-            | InferSource::Slot(index, _)) = source;
-            let &arg = arg_types.get(index)?;
+            let reference = self.diamond_source_type(source, arg_types)?;
             // A `null` pins nothing: it converts to whatever the others say,
             // and when nothing else speaks the variable is `Object` — javac's
             // `new Pair<>(null, 2)` is a `Pair<Object, Integer>`.
-            if arg == JType::Null && matches!(source, InferSource::Direct(_)) {
+            if reference == JType::Null {
                 saw_null = true;
                 continue;
             }
-            let arg = match source {
-                InferSource::Direct(_) => arg,
-                InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
-                InferSource::LambdaResult(_) => lambda_produces(arg, self.table)?,
-                InferSource::ElementResult(_, position) => {
-                    element_result(TypeArgs::of(arg).first?, position, self.table)?
-                }
-                InferSource::Slot(_, position) => slot_type(arg, position)?,
-            };
-            let reference = match boxable_primitive(arg) {
-                Some(elem) => JType::Boxed(elem),
-                None => arg,
-            };
             match joined {
                 None => joined = Some(reference),
                 Some(prev) if prev == reference => {}
@@ -33806,6 +34018,127 @@ impl BodyGen<'_> {
             return Some(ElemType::Object(self.table.object_id));
         }
         value_elem_of(joined?, self.table)
+    }
+
+    /// The reference type one inference source of a diamond pins — the
+    /// argument itself, its element, what its lambda answers, … — or `Null`
+    /// for a `null` passed straight to the variable, which pins nothing.
+    /// `None` when the source cannot be read at all.
+    fn diamond_source_type(
+        &self,
+        source: crate::ast::InferSource,
+        arg_types: &[JType],
+    ) -> Option<JType> {
+        use crate::ast::InferSource;
+        let (InferSource::Direct(index)
+        | InferSource::Element(index)
+        | InferSource::LambdaResult(index)
+        | InferSource::ElementResult(index, _)
+        | InferSource::Slot(index, _)) = source;
+        let &arg = arg_types.get(index)?;
+        if arg == JType::Null && matches!(source, InferSource::Direct(_)) {
+            return Some(JType::Null);
+        }
+        let arg = match source {
+            InferSource::Direct(_) => arg,
+            InferSource::Element(_) => TypeArgs::of(arg).first?.base_type(),
+            InferSource::LambdaResult(_) => lambda_produces(arg, self.table)?,
+            InferSource::ElementResult(_, position) => {
+                element_result(TypeArgs::of(arg).first?, position, self.table)?
+            }
+            InferSource::Slot(_, position) => slot_type(arg, position)?,
+        };
+        Some(match boxable_primitive(arg) {
+            Some(elem) => JType::Boxed(elem),
+            None => arg,
+        })
+    }
+
+    /// Whether a DIAMOND of a user generic class takes the target's type,
+    /// when the target is one of the class's parameterized SUPERTYPES —
+    /// `Supplier<String> s = new Holder<>(null)` where `Holder<T> implements
+    /// Supplier<T>`, or `Comparable<Box<String>> c = new Box<>(null)`.
+    ///
+    /// javac infers the class's variables from the target (through what the
+    /// class wrote on that supertype) and then checks the ARGUMENTS against
+    /// them. Read from the arguments alone, a `null` made the variable
+    /// `Object`, and the program was "Holder<Object> cannot be converted to
+    /// Supplier<String>". A variable the target does not reach keeps what the
+    /// arguments pinned, which is then checked by the ordinary conversion.
+    fn diamond_fits_supertype(&mut self, init: &Expr, target: JType) -> bool {
+        let Expr::NewObject {
+            class,
+            type_args,
+            args,
+            outer: None,
+            raw: false,
+            ..
+        } = init
+        else {
+            return false;
+        };
+        let JType::Generic {
+            class: sup,
+            arg: to_arg,
+            rest: to_rest,
+        } = target
+        else {
+            return false;
+        };
+        if !type_args.is_empty() {
+            return false;
+        }
+        let Some(sub) = self.table.class_id(class) else {
+            return false;
+        };
+        if !self.table.is_subtype(sub, sup) {
+            return false;
+        }
+        // The class's variables the target fixes, by position.
+        let mut bindings: [Option<ElemType>; 2] = [None, None];
+        if sub == sup {
+            bindings[0] = Some(to_arg);
+            bindings[1] = self.table.type_arg(to_arg, to_rest, 1);
+        } else {
+            if !self.table.unify_supertype(sub, sup, to_arg, to_rest, &mut bindings) {
+                return false;
+            }
+        }
+        let arg_types: Vec<JType> = args.iter().map(|arg| self.type_of(arg)).collect();
+        let Resolution::Found(sig) = self.table.resolve(class, "<init>", &arg_types) else {
+            return false;
+        };
+        // No constructor parameter mentions a variable: nothing to check.
+        let Some(plan) = sig.ret_infer.clone() else {
+            return true;
+        };
+        // A variable the target does not reach is whatever the arguments
+        // pinned; the value is typed as the target, which never names it.
+        for (sources, bound) in [(&plan.sources, bindings[0]), (&plan.second, bindings[1])] {
+            let Some(bound) = bound else {
+                continue;
+            };
+            let want = elem_value_type(bound, self.table);
+            for &source in sources {
+                // An argument that IS the variable is itself a poly
+                // expression: a diamond or a factory there takes `want` as
+                // its target (`new Holder<>(new Holder<>(null))`).
+                if let crate::ast::InferSource::Direct(index) = source
+                    && let Some(arg) = args.get(index)
+                {
+                    if !self.value_fits(arg, want) {
+                        return false;
+                    }
+                    continue;
+                }
+                match self.diamond_source_type(source, &arg_types) {
+                    Some(JType::Null) => {}
+                    Some(pinned) if widens(pinned, want, self.table) => {}
+                    _ => return false,
+                }
+            }
+        }
+        true
     }
 
     /// Whether an argument's type is assignable to `Throwable` (a library
@@ -37352,6 +37685,49 @@ impl BodyGen<'_> {
                 pick_builtin(OBJECT_METHODS, method, &arg_types, elem, self.table)
             })
         };
+        // A DIAMOND argument is a poly expression here too: `list.add(new
+        // Box<>(null))` into a `List<Comparable<Box<String>>>` takes its
+        // variables from the element, as the same `new` does in an assignment
+        // (`diamond_fits_supertype`), so the overload is chosen again with it
+        // typed as the parameter it fits.
+        let chosen = match chosen {
+            None if args
+                .iter()
+                .any(|arg| matches!(arg, Expr::NewObject { type_args, .. } if type_args.is_empty())) =>
+            {
+                let candidates: Vec<Vec<JType>> = methods
+                    .iter()
+                    .filter(|m| {
+                        m.name == method && m.params.len() == args.len() && elem.role.offers(m.needs)
+                    })
+                    .map(|m| {
+                        m.params
+                            .iter()
+                            .map(|param| bparam_type(*param, elem, self.table))
+                            .collect()
+                    })
+                    .collect();
+                let mut found = None;
+                for params in candidates {
+                    let mut adopted = arg_types.clone();
+                    for (at, (arg, param)) in args.iter().zip(&params).enumerate() {
+                        if matches!(arg, Expr::NewObject { .. })
+                            && self.diamond_fits_supertype(arg, *param)
+                        {
+                            adopted[at] = *param;
+                        }
+                    }
+                    if adopted != arg_types
+                        && let Some(picked) = pick_builtin(methods, method, &adopted, elem, self.table)
+                    {
+                        found = Some(picked);
+                        break;
+                    }
+                }
+                found
+            }
+            chosen => chosen,
+        };
         let Some(chosen) = chosen else {
             // A member the receiver's FACE does not declare is not a bad
             // overload, it is a missing symbol — `SortedSet` simply has no
@@ -39646,6 +40022,13 @@ impl BodyGen<'_> {
         span: SourceSpan,
     ) {
         let iterable_ty = self.expr(iterable);
+        // javac's Lower writes the whole loop — `iterator()`, `hasNext()`,
+        // `next()`, an array's `length` — at the ITERABLE's position, so the
+        // NullPointerException of a null source names its line.
+        let line = self.code.last_expr_line;
+        if line > 0 {
+            self.code.mark_line(line);
+        }
         // Every intrinsic collection compiles to the same index loop: caturra
         // has no iterators, so each exposes a positional accessor instead.
         let indexed = match iterable_ty {
@@ -40135,6 +40518,13 @@ impl BodyGen<'_> {
     }
 
     fn expression_statement(&mut self, expr: &Expr) {
+        match invocation_line(expr) {
+            Some(line) => self.with_call_line(line, |body| body.expression_statement_inner(expr)),
+            None => self.expression_statement_inner(expr),
+        }
+    }
+
+    fn expression_statement_inner(&mut self, expr: &Expr) {
         let outcome = match expr {
             Expr::Call {
                 receiver,
@@ -40192,6 +40582,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                ..
             } => self.super_method_call(owner.as_deref(), method, args, *span),
             // `new Foo();` is a class-instance-creation statement expression;
             // assignment and `++`/`--` are statement expressions too (JLS §14.8,
@@ -43438,16 +43829,20 @@ impl BodyGen<'_> {
     ) -> Option<MethodSig> {
         // Which (candidate, argument) pairs are a conditional that can take
         // that parameter as its type — asked here, where the branches can be
-        // typed.
+        // typed — or a DIAMOND whose variables the parameter fixes through a
+        // supertype (`show(new Holder<>(null))` for a `Supplier<String>`).
         let mut conditionals = Vec::new();
         for (which, params) in candidates.iter().enumerate() {
             if params.len() != args.len() {
                 continue;
             }
             for (at, (arg, param)) in args.iter().zip(params).enumerate() {
-                if matches!(arg, Expr::Ternary { .. })
-                    && self.ternary_adopts_target(arg, arg_types[at], *param)
-                {
+                let adopts = match arg {
+                    Expr::Ternary { .. } => self.ternary_adopts_target(arg, arg_types[at], *param),
+                    Expr::NewObject { .. } => self.diamond_fits_supertype(arg, *param),
+                    _ => false,
+                };
+                if adopts {
                     conditionals.push((which, at));
                 }
             }
@@ -44551,6 +44946,7 @@ impl BodyGen<'_> {
                         args: args.clone(),
                         span: *span,
                         type_args: Vec::new(),
+                        paren_line: 0,
                     });
                 }
                 // `Comparator` combinators build another comparator (mirrors the
@@ -45653,6 +46049,36 @@ impl BodyGen<'_> {
 
     #[allow(clippy::too_many_lines)] // one arm per expression kind
     fn expr_emit(&mut self, expr: &Expr) -> JType {
+        let ty = match invocation_line(expr) {
+            Some(line) => self.with_call_line(line, |body| body.expr_emit_inner(expr)),
+            None => self.expr_emit_inner(expr),
+        };
+        let line = match expr {
+            Expr::Call { paren_line, .. } | Expr::SuperMethodCall { paren_line, .. }
+                if *paren_line > 0 =>
+            {
+                *paren_line
+            }
+            other => other.span().start.line,
+        };
+        if line > 0 {
+            self.code.last_expr_line = line;
+        }
+        ty
+    }
+
+    /// Runs `emit` with `line` as the line every invoke it writes marks —
+    /// javac's `statBegin(tree.pos)` just before an invocation — and puts
+    /// the enclosing call's back after, so the OUTER call, whose arguments
+    /// these are, marks its own line again when its invoke is written.
+    fn with_call_line<T>(&mut self, line: u32, emit: impl FnOnce(&mut Self) -> T) -> T {
+        let outer = std::mem::replace(&mut self.code.call_line, line);
+        let answer = emit(self);
+        self.code.call_line = outer;
+        answer
+    }
+
+    fn expr_emit_inner(&mut self, expr: &Expr) -> JType {
         match expr {
             Expr::Literal { value, span } => self.literal(value, *span),
             Expr::Name { path, span } => self.name(path, *span),
@@ -45841,6 +46267,7 @@ impl BodyGen<'_> {
                 method,
                 args,
                 span,
+                ..
             } => match self.super_method_call(owner.as_deref(), method, args, *span) {
                 None => JType::Error,
                 Some(Some(ty)) => ty,
@@ -48663,6 +49090,9 @@ impl BodyGen<'_> {
     fn ternary(&mut self, cond: &Expr, then: &Expr, els: &Expr, span: SourceSpan) -> JType {
         let target = self.conditional_join(then, els);
 
+        // javac's `visitConditional` marks the condition's line, then each
+        // branch's own before its code.
+        self.code.mark_expr_line(cond);
         let cond_ty = self.expr(cond);
         let cond_ty = self.unbox_wrapper(cond_ty);
         if cond_ty != JType::Boolean && cond_ty != JType::Error {
@@ -48712,6 +49142,7 @@ impl BodyGen<'_> {
         // Letting each branch's assignments stand made
         // `int x; int y = c ? (x = 1) : 0;` accept a later read of `x`.
         let before_branches = self.assigned_flags();
+        self.code.mark_expr_line(then);
         let actual = self.expr(then);
         coerce(self, actual);
         let after_then = self.assigned_flags();
@@ -48720,6 +49151,7 @@ impl BodyGen<'_> {
         self.code.drop_stack(target.width());
         self.code.bind(else_label);
         self.restore_assigned(&before_branches);
+        self.code.mark_expr_line(els);
         let actual = self.expr(els);
         coerce(self, actual);
         self.intersect_assigned(&after_then);
@@ -49775,6 +50207,12 @@ impl BodyGen<'_> {
     }
 
     fn concat(&mut self, lhs: &Expr, rhs: &Expr) -> JType {
+        // javac concatenates through `invokedynamic`, which marks no line;
+        // the builder calls standing in for it must not either.
+        self.with_call_line(0, |body| body.concat_inner(lhs, rhs))
+    }
+
+    fn concat_inner(&mut self, lhs: &Expr, rhs: &Expr) -> JType {
         // A compile-time constant string concatenation (JLS §15.28/§15.29) folds
         // to a SINGLE interned constant, so `"ab" == "a" + "b"` and
         // `"ab" == p + "b"` (a constant variable `p`) compare equal, as on a
@@ -49860,6 +50298,14 @@ impl BodyGen<'_> {
     /// Box the primitive on the stack into its wrapper via
     /// `Wrapper.valueOf(prim)`.
     fn emit_box(&mut self, elem: ElemType) {
+        // javac boxes through a call Lower writes at the boxed EXPRESSION's
+        // position, so the `valueOf` marks that line — not an enclosing
+        // call's, whose invoke comes after and marks its own.
+        let line = self.code.last_expr_line;
+        self.with_call_line(line, |body| body.emit_box_at(elem));
+    }
+
+    fn emit_box_at(&mut self, elem: ElemType) {
         let internal = wrapper_internal(elem);
         let prim = elem.base_type();
         let descriptor = format!("({})L{internal};", prim.descriptor(self.table));
@@ -49873,6 +50319,13 @@ impl BodyGen<'_> {
     /// Unbox the wrapper on the stack into its primitive via
     /// `wrapper.xValue()`.
     fn emit_unbox(&mut self, elem: ElemType) {
+        // As `emit_box`: `n.intValue()` is javac's call at `n`'s position —
+        // the line a NullPointerException from unboxing names.
+        let line = self.code.last_expr_line;
+        self.with_call_line(line, |body| body.emit_unbox_at(elem));
+    }
+
+    fn emit_unbox_at(&mut self, elem: ElemType) {
         let internal = wrapper_internal(elem);
         let prim = elem.base_type();
         let method = match elem {
@@ -50399,9 +50852,33 @@ impl BodyGen<'_> {
         else {
             return None;
         };
-        if !type_args.is_empty() || class != to_class {
+        if !type_args.is_empty() {
             return None;
         }
+        // What the target fixes each variable to: its own arguments for the
+        // same class, or — for a parameterized SUPERTYPE — what the class
+        // wrote there, matched against the target's (`Supplier<String>` for
+        // a `Holder<T> implements Supplier<T>` fixes `T` to `String`).
+        let mut bindings: [Option<ElemType>; 2] = [None, None];
+        if class != to_class {
+            if !self.table.is_subtype(class, to_class) {
+                return None;
+            }
+            if !self
+                .table
+                .unify_supertype(class, to_class, to_arg, to_rest, &mut bindings)
+            {
+                return None;
+            }
+        }
+        let wanted_at = |index: usize| {
+            if class == to_class {
+                self.table
+                    .type_arg(to_arg, to_rest, u8::try_from(index).unwrap_or(u8::MAX))
+            } else {
+                bindings.get(index).copied().flatten()
+            }
+        };
         let info = self.table.info_by_id(class)?;
         let described = |elem: ElemType| {
             let ty = elem_value_type(elem, self.table);
@@ -50419,11 +50896,11 @@ impl BodyGen<'_> {
             .enumerate()
             .find(|(index, _)| {
                 let at = u8::try_from(*index).unwrap_or(u8::MAX);
-                self.table.type_arg(arg, rest, at) != self.table.type_arg(to_arg, to_rest, at)
+                wanted_at(*index).is_some_and(|wanted| self.table.type_arg(arg, rest, at) != Some(wanted))
             })?;
         let at = u8::try_from(index).ok()?;
         let found = self.table.type_arg(arg, rest, at)?;
-        let wanted = self.table.type_arg(to_arg, to_rest, at)?;
+        let wanted = wanted_at(index)?;
         let owner = source_type_name(&JType::Object(class).describe(self.table));
         // A BOUNDED variable's constraints fold its bound in (`T extends
         // Comparable<T>` adds `Integer` to the equality constraints), which
@@ -51103,12 +51580,35 @@ struct CodeBuilder {
     /// builtin collection, compiled by the ordinary instance-call path, can
     /// be made the NON-virtual call it is.
     last_virtual: Option<usize>,
+    /// The line of the call being emitted (its `(`), which every invoke
+    /// instruction marks as javac does; 0 where none applies (outside a
+    /// call, or inside a `new` or a concatenation, which mark nothing).
+    call_line: u32,
+    /// The javac position line of the expression emitted last — where a
+    /// boxing or unboxing conversion applied to it marks.
+    last_expr_line: u32,
+}
+
+/// The line a call written in the source marks before its invoke (its `(`),
+/// `Some(0)` for an expression whose calls must mark nothing — a `new`, whose
+/// constructor javac invokes without a line of its own — and `None` for
+/// everything else, which leaves the enclosing call's line in force.
+fn invocation_line(expr: &Expr) -> Option<u32> {
+    match expr {
+        Expr::Call { paren_line, .. } | Expr::SuperMethodCall { paren_line, .. } => {
+            Some(*paren_line)
+        }
+        Expr::NewObject { .. } => Some(0),
+        _ => None,
+    }
 }
 
 impl CodeBuilder {
     fn new() -> Self {
         Self {
             last_virtual: None,
+            call_line: 0,
+            last_expr_line: 0,
             bytes: Vec::new(),
             depth: 0,
             max_stack: 0,
@@ -51145,6 +51645,16 @@ impl CodeBuilder {
     /// Record that the code emitted from here on corresponds to
     /// `line` (1-based). Consecutive duplicate lines and same-offset
     /// re-marks collapse.
+    /// Marks the line an expression starts on — javac's `statBegin` for a
+    /// loop condition or a conditional's parts. A synthesized expression
+    /// (line 0) leaves the current line standing.
+    fn mark_expr_line(&mut self, expr: &Expr) {
+        let line = expr.span().start.line;
+        if line > 0 {
+            self.mark_line(line);
+        }
+    }
+
     fn mark_line(&mut self, line: u32) {
         let line = u16::try_from(line).unwrap_or(u16::MAX);
         let offset = u16::try_from(self.bytes.len()).unwrap_or(u16::MAX);
@@ -51185,6 +51695,11 @@ impl CodeBuilder {
     }
 
     fn push_op_u16(&mut self, opcode: u8, operand: u16, pushes: u16) {
+        if self.call_line > 0
+            && matches!(opcode, op::INVOKEVIRTUAL | op::INVOKESPECIAL | op::INVOKESTATIC)
+        {
+            self.mark_line(self.call_line);
+        }
         if opcode == op::INVOKEVIRTUAL {
             self.last_virtual = Some(self.bytes.len());
         }

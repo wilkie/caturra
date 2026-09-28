@@ -495,6 +495,9 @@ pub enum Stmt {
         body: Box<Stmt>,
         cond: Expr,
         span: SourceSpan,
+        /// The line of the condition's `(` — javac's position for it, which
+        /// the loop's test marks (the `while (…)` line, not the `do`).
+        cond_line: u32,
     },
     For {
         /// Declaration or simple statement; scoped to the loop.
@@ -685,6 +688,12 @@ pub enum Expr {
         /// against the result has an element type.
         type_args: Vec<TypeRef>,
         span: SourceSpan,
+        /// The line of the call's `(` — javac's POSITION for an invocation,
+        /// which it marks in the LineNumberTable just before the invoke
+        /// instruction, so a trace through a call written over several lines
+        /// names the line its arguments close on. 0 for a call a pass
+        /// synthesizes: the statement's line stands.
+        paren_line: u32,
     },
     Binary {
         op: BinaryOp,
@@ -776,6 +785,8 @@ pub enum Expr {
         method: String,
         args: Vec<Expr>,
         span: SourceSpan,
+        /// As [`Expr::Call`]'s: the line of the `(`.
+        paren_line: u32,
     },
     /// `cond ? then : else`.
     Ternary {

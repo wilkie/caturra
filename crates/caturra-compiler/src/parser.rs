@@ -95,7 +95,9 @@ fn desugar_try_with_resources(
     finally_body: Option<Vec<Stmt>>,
     span: SourceSpan,
     serial: usize,
+    body_end_line: u32,
 ) -> Stmt {
+    let try_line = span.start.line;
     let name_expr = |name: &str| Expr::Name {
         path: vec![name.to_owned()],
         span,
@@ -111,6 +113,11 @@ fn desugar_try_with_resources(
         span,
     };
     // `checked` marks the one call codegen validates the resource type on.
+    // It is REPORTED at the resource, but the line a trace through a
+    // throwing `close()` names is javac's: the body's closing brace when the
+    // body completed (`make_at(TreeInfo.endPos(block))`), and the `try`
+    // keyword's when the close runs because the body threw (the checked,
+    // suppressing call).
     let close_call = |name: &str, checked: bool, span: SourceSpan| {
         Stmt::Expr(Expr::Call {
             receiver: Some(Box::new(name_expr(name))),
@@ -118,6 +125,11 @@ fn desugar_try_with_resources(
             args: Vec::new(),
             span,
             type_args: Vec::new(),
+            paren_line: if checked {
+                try_line
+            } else {
+                body_end_line
+            },
         })
     };
 
@@ -146,6 +158,7 @@ fn desugar_try_with_resources(
                     args: vec![name_expr(&closing)],
                     span,
                     type_args: Vec::new(),
+                    paren_line: 0,
                 })],
                 span,
             }],
@@ -261,6 +274,7 @@ fn desugar_synchronized(lock: Expr, body: Vec<Stmt>, span: SourceSpan, serial: u
             args,
             type_args: Vec::new(),
             span,
+            paren_line: 0,
         })
     };
     let system = || Expr::Name {
@@ -2838,6 +2852,8 @@ impl Parser<'_> {
         };
         self.expect_symbol("{", "after 'try'")?;
         let body = self.block_body();
+        // The body's closing brace: javac writes a resource's `close()` there.
+        let body_end_line = self.tokens[self.pos.saturating_sub(1)].span.start.line;
 
         let mut catches = Vec::new();
         while self.at_keyword(Keyword::Catch) {
@@ -2902,6 +2918,7 @@ impl Parser<'_> {
             finally_body,
             span,
             self.resource_counter,
+            body_end_line,
         ))
     }
 
@@ -3132,12 +3149,14 @@ impl Parser<'_> {
             self.error_here("expected 'while' after the do-while body");
             return Err(Abort);
         }
+        let cond_line = self.here().start.line;
         let cond = self.paren_condition("while")?;
         self.expect_symbol(";", "to end the do-while statement")?;
         Ok(Stmt::DoWhile {
             body,
             cond,
             span: start,
+            cond_line,
         })
     }
 
@@ -4192,6 +4211,7 @@ impl Parser<'_> {
                     let owner = path[0].clone();
                     self.pos += 2; // `super` `.`
                     let (method, method_span) = self.expect_ident("after 'super.'")?;
+                    let paren_line = self.here().start.line;
                     let args = self.arguments()?;
                     expr = Expr::SuperMethodCall {
                         owner: Some(owner),
@@ -4201,6 +4221,7 @@ impl Parser<'_> {
                             start: expr.span().start,
                             end: method_span.end,
                         },
+                        paren_line,
                     };
                     continue;
                 }
@@ -4227,6 +4248,7 @@ impl Parser<'_> {
                 let witness = self.type_witness()?;
                 let (segment, segment_span) = self.expect_ident("after '.'")?;
                 if self.at_symbol("(") {
+                    let paren_line = self.here().start.line;
                     let args = self.arguments()?;
                     // Through the closing `)`, as the bare-call form already
                     // does: a call's span that stopped after its NAME left the
@@ -4243,6 +4265,7 @@ impl Parser<'_> {
                         args,
                         type_args: witness,
                         span,
+                        paren_line,
                     };
                 } else if let Expr::Name { path, span } = &mut expr {
                     path.push(segment);
@@ -4307,6 +4330,7 @@ impl Parser<'_> {
                 {
                     let method = path[0].clone();
                     let start = span.start;
+                    let paren_line = self.here().start.line;
                     let args = self.arguments()?;
                     let span = SourceSpan {
                         start,
@@ -4318,6 +4342,7 @@ impl Parser<'_> {
                         args,
                         span,
                         type_args: Vec::new(),
+                        paren_line,
                     };
                 } else {
                     self.error_here("this call expression is not yet supported by caturra");
@@ -4834,6 +4859,7 @@ impl Parser<'_> {
                         span,
                     });
                 }
+                let paren_line = self.here().start.line;
                 let args = self.arguments()?;
                 Ok(Expr::SuperMethodCall {
                     owner: None,
@@ -4843,6 +4869,7 @@ impl Parser<'_> {
                         start: start.start,
                         end: method_span.end,
                     },
+                    paren_line,
                 })
             }
             Some(TokenKind::Keyword(kw)) if primitive_type_name(*kw).is_some() => {
@@ -5307,6 +5334,7 @@ fn desugar_enum(
             args: vec![var("__n")],
             span: zero,
             type_args: Vec::new(),
+            paren_line: 0,
         };
         let loop_body = Stmt::If {
             cond: match_test,
@@ -5327,6 +5355,7 @@ fn desugar_enum(
                 args: Vec::new(),
                 span: zero,
                 type_args: Vec::new(),
+                paren_line: 0,
             },
             body: Box::new(loop_body),
             span: zero,

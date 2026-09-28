@@ -3270,6 +3270,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             }],
             type_args: Vec::new(),
             span,
+            paren_line: 0,
         };
         if stream {
             *method = String::from("__toArrayTyped");
@@ -3434,6 +3435,7 @@ fn desugar_expr(expr: &mut Expr, expected: Option<&TypeRef>, ctx: &mut Ctx) {
             args,
             type_args,
             span,
+            ..
         } => {
             // `System.out.println(stream.collect(…))` where only a METHOD
             // REFERENCE or a finisher fixes what the collector makes: javac
@@ -5087,6 +5089,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 method: method.clone(),
                 args,
                 span,
+                paren_line: 0,
             };
             let body = if matches!(sam.ret, TypeRef::Void) {
                 vec![Stmt::Expr(call)]
@@ -5113,6 +5116,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 args: param_names.iter().map(|n| name_expr(n)).collect(),
                 span,
                 type_args: Vec::new(),
+                paren_line: 0,
             })),
             span,
         };
@@ -5174,6 +5178,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 args: param_names.iter().map(|n| name_expr(n)).collect(),
                 span,
                 type_args: Vec::new(),
+                paren_line: 0,
             }
         } else if param_names.is_empty() {
             // An unbound instance reference needs the SAM to supply a receiver
@@ -5188,6 +5193,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 args: Vec::new(),
                 span,
                 type_args: Vec::new(),
+                paren_line: 0,
             }
         } else {
             // Unbound instance: `p0.method(p1, ...)`.
@@ -5205,6 +5211,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
                 args: param_names[1..].iter().map(|n| name_expr(n)).collect(),
                 span,
                 type_args: Vec::new(),
+                paren_line: 0,
             }
         }
     } else {
@@ -5215,6 +5222,7 @@ fn method_ref_to_lambda(expr: &Expr, sam: &Sam, ctx: &mut Ctx) -> Expr {
             args: param_names.iter().map(|n| name_expr(n)).collect(),
             span,
             type_args: Vec::new(),
+            paren_line: 0,
         }
     };
 

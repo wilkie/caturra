@@ -3089,6 +3089,14 @@ impl<'run> Interpreter<'run> {
                 frame.stack.clear();
                 frame.stack.push(JValue::Ref(Some(exception)));
                 frame.pc = handler_pc;
+                // A handler is an ordinary resume point. A frame that had
+                // triggered a `<clinit>` which THREW kept the re-execute flag
+                // (only a normal return cleared it), so the next exception
+                // unwinding into it was searched one instruction too late —
+                // past the end of a `try` whose last instruction is the call.
+                // A try-with-resources' `close()` is exactly that, and its
+                // exception escaped instead of being suppressed.
+                frame.pc_reexecutes = false;
                 return Ok(true);
             }
             // Anything escaping a reflective `Method.invoke` reaches the caller

@@ -453,6 +453,30 @@ macro_rules! differential_test_stderr {
     };
 }
 
+/// As `differential_test_stderr!`, for a trace that passes THROUGH the JDK's
+/// own library: its `at java.base/…` frames are dropped from the JDK's side
+/// before comparing, since caturra deliberately models no library frame (they
+/// differ between JDK builds). Every frame of the program's own is compared.
+macro_rules! differential_test_trace {
+    ($name:ident, $class:literal, $source:literal) => {
+        #[test]
+        fn $name() {
+            if !jdk_available() {
+                eprintln!("skipping: no JDK on PATH");
+                return;
+            }
+            let (stdout, stderr) = run_with_jdk_both($class, $source, "", &[]);
+            let stderr: String = stderr
+                .lines()
+                .filter(|line| !line.starts_with("\tat java.base/"))
+                .map(|line| format!("{line}\n"))
+                .collect();
+            let actual = run_with_caturra_both($class, $source, "", &[]);
+            assert_eq!(actual, (stdout, stderr), "stdout/stderr diverge for {}", $class);
+        }
+    };
+}
+
 /// A program neither javac nor caturra may accept.
 macro_rules! differential_reject {
     ($name:ident, $class:literal, $source:literal) => {
@@ -66325,6 +66349,356 @@ import java.util.function.*;
 public class ScannerNoArgs {
     public static void main(String[] args) {
         Scanner sc = new Scanner();
+    }
+}
+"#
+);
+
+// Which LINE a frame names, inside a statement written over several: javac
+// marks the line of each call's `(` just before its invoke, each loop test and
+// conditional branch at its own position, a boxing or unboxing at the
+// converted expression's, a for-each's machinery at the iterable's, and a
+// field initializer at the field's NAME. A bridge frame names its class's
+// declaration — for an anonymous comparator, the `new` that declares it,
+// which caturra did not have at all.
+differential_test_trace!(
+    a_frame_names_the_line_javac_marks,
+    "Lines",
+    r#"
+import java.util.*;
+
+public class Lines {
+    static int f(int a, int b) { return a / b; }
+    static Integer none() { return null; }
+    int[] arr = new int[2];
+    int bad =
+        arr[5];
+    static class Cfg {
+        static int ok = 1;
+        static int v =
+            Integer.parseInt("nope");
+    }
+    static class ByLen implements Comparator<String> {
+        public int compare(String a, String b) {
+            return a.length() - b.length();
+        }
+    }
+    static class Base {
+        Base(int v) {
+            if (v == 0) throw new IllegalStateException("base");
+        }
+        Base() {
+            this(0);
+        }
+    }
+    static class Chained extends Base {
+        Chained() {
+            super(
+                0);
+        }
+    }
+    static class Implicit extends Base {
+        int x = 4;
+    }
+    static class Divides {
+        int v;
+        Divides(int a) {
+            this(a,
+                10 / a);
+        }
+        Divides(int a, int b) { v = b; }
+    }
+    static class Res implements AutoCloseable {
+        public void close() {
+            throw new IllegalStateException("close");
+        }
+    }
+    public static void main(String[] args) {
+        int z = 0;
+        try {
+            System.out.println(
+                f(1,
+                  z));
+        } catch (ArithmeticException e) { e.printStackTrace(); }
+        try {
+            List<String> l = Arrays.asList("a", null);
+            l.stream()
+              .map(s -> s)
+              .map(s -> s.length())
+              .forEach(x -> { });
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            String s = null;
+            String t = "a"
+              + s.trim();
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            for (int i = 0;
+                 i < 10 / z;
+                 i++) { }
+        } catch (ArithmeticException e) { e.printStackTrace(); }
+        try {
+            int r = z == 1
+              ? 1
+              : 5 / z;
+        } catch (ArithmeticException e) { e.printStackTrace(); }
+        try {
+            boolean b = true;
+            int r = b
+              ? none()
+              : 0;
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            Integer n = null;
+            int v =
+              n;
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            int k = 0;
+            do {
+                k++;
+            } while (
+                10 / (k - 1) > 0);
+        } catch (ArithmeticException e) { e.printStackTrace(); }
+        try {
+            List<Integer> none = null;
+            for (int x :
+                 none) { }
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            StringBuilder sb = new StringBuilder();
+            sb.append("a")
+              .append((String) null)
+              .charAt(
+                99);
+        } catch (IndexOutOfBoundsException e) { e.printStackTrace(); }
+        try {
+            new Lines();
+        } catch (ArrayIndexOutOfBoundsException e) { e.printStackTrace(); }
+        try {
+            System.out.println(Cfg.v);
+        } catch (ExceptionInInitializerError e) { e.printStackTrace(); }
+        try {
+            new ArrayList<>(Arrays.asList("x", null)).sort(new ByLen());
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            Comparator<String> c = new Comparator<String>() {
+                public int compare(String a, String b) {
+                    return a.length() - b.length();
+                }
+            };
+            c.compare("a", null);
+        } catch (NullPointerException e) { e.printStackTrace(); }
+        try {
+            new Chained();
+        } catch (IllegalStateException e) { e.printStackTrace(); }
+        try {
+            new Implicit();
+        } catch (IllegalStateException e) { e.printStackTrace(); }
+        try {
+            new Divides(0);
+        } catch (ArithmeticException e) { e.printStackTrace(); }
+        try {
+            try (Res r =
+                     new Res()) {
+                System.out.println("body");
+            }
+        } catch (IllegalStateException e) { e.printStackTrace(); }
+        try {
+            try
+                (Res r =
+                     new Res()) {
+                throw new RuntimeException("body");
+            }
+        } catch (RuntimeException e) { e.printStackTrace(); }
+        System.out.println("done");
+    }
+}
+"#
+);
+
+// A DIAMOND whose variables only a SUPERTYPE target fixes: javac infers them
+// through what the class wrote on that supertype, then checks the arguments —
+// so a `null` (which pins nothing) takes the target's. Read from the
+// arguments alone the variable was `Object` and each was refused. Beneath
+// that, a `Box<String>` was no `Comparable<Box<String>>` even written out: the
+// recorded supertype argument `Box<T>` kept the NAME `T`, which resolves to
+// nothing, so it read as a bare `Object`.
+differential_test!(
+    a_diamond_takes_its_variables_through_a_supertype,
+    "SuperDiamond",
+    r#"
+import java.util.*;
+import java.util.function.*;
+
+public class SuperDiamond {
+    static class Box<T> implements Comparable<Box<T>> {
+        T v;
+        Box(T v) { this.v = v; }
+        public int compareTo(Box<T> o) { return v == null ? -1 : 1; }
+    }
+    static class Holder<T> implements Supplier<T> {
+        T v;
+        Holder(T v) { this.v = v; }
+        public T get() { return v; }
+    }
+    static class Pair<A, B> implements Comparable<Pair<A, B>> {
+        A a; B b;
+        Pair(A a, B b) { this.a = a; this.b = b; }
+        public int compareTo(Pair<A, B> o) { return 0; }
+    }
+    static class Base<T> { T v; }
+    static class Derived<T> extends Base<T> { Derived(T v) { this.v = v; } }
+    static class Node<T> implements Iterable<T> {
+        List<T> items = new ArrayList<>();
+        Node(T first) { items.add(first); }
+        public Iterator<T> iterator() { return items.iterator(); }
+    }
+    static String show(Supplier<String> s) { return s.get() + "!"; }
+    static Supplier<String> make() { return new Holder<>(null); }
+    interface Pairish<A, B> { A left(); B right(); }
+    static class P<A, B> implements Pairish<A, B> {
+        A a; B b;
+        P(A a, B b) { this.a = a; this.b = b; }
+        public A left() { return a; }
+        public B right() { return b; }
+    }
+    static class Swap<A, B> implements Pairish<B, A> {
+        A a; B b;
+        Swap(A a, B b) { this.a = a; this.b = b; }
+        public B left() { return b; }
+        public A right() { return a; }
+    }
+
+    public static void main(String[] args) {
+        Box<String> named = new Box<String>("x");
+        Comparable<Box<String>> written = named;
+        System.out.println(written.compareTo(named));
+        Comparable<Box<String>> b = new Box<>(null);
+        System.out.println(b.compareTo(new Box<>("a")));
+        Supplier<String> s = new Holder<>(null);
+        System.out.println(s.get());
+        Base<String> base = new Derived<>(null);
+        System.out.println(base.v);
+        Comparable<Pair<String, Integer>> p = new Pair<>(null, null);
+        System.out.println(p.compareTo(new Pair<>("x", 1)));
+        System.out.println(show(new Holder<>(null)));
+        System.out.println(make().get());
+        Iterable<String> it = new Node<>(null);
+        for (String x : it) System.out.println(x);
+        List<Comparable<Box<String>>> l = new ArrayList<>();
+        l.add(new Box<>(null));
+        System.out.println(l.size());
+        Supplier<Object> widened = new Holder<>("kept");
+        System.out.println(widened.get());
+        Supplier<Supplier<String>> nested = new Holder<>(new Holder<>(null));
+        System.out.println(nested.get().get());
+        Pairish<String, Integer> two = new P<>(null, 3);
+        System.out.println(two.left() + " " + (two.right() + 1));
+        Pairish<String, Integer> swapped = new Swap<>(3, "s");
+        Pairish<String, Integer> spelled = new Swap<Integer, String>(4, "tt");
+        System.out.println(swapped.left().length() + swapped.right() + spelled.right());
+        Supplier<? extends CharSequence> bounded = new Holder<>("xyz");
+        System.out.println(bounded.get().length());
+    }
+}
+"#
+);
+
+// ...and the other direction: an argument the target's variable cannot take
+// is javac's "cannot infer type arguments", through a supertype as through
+// the class itself.
+differential_wording!(
+    reject_a_diamond_its_supertype_target_contradicts,
+    "RejectSuperDiamond",
+    r"
+import java.util.function.*;
+
+public class RejectSuperDiamond {
+    static class Holder<T> implements Supplier<T> {
+        T v;
+        Holder(T v) { this.v = v; }
+        public T get() { return v; }
+    }
+    public static void main(String[] args) {
+        Supplier<String> t = new Holder<>(5);
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_diamond_argument_its_supertype_parameter_contradicts,
+    "RejectSuperDiamondArg",
+    r"
+public class RejectSuperDiamondArg {
+    static class Box<T> implements Comparable<Box<T>> {
+        T v;
+        Box(T v) { this.v = v; }
+        public int compareTo(Box<T> o) { return 1; }
+    }
+    static void take(Comparable<Box<String>> c) { }
+    public static void main(String[] args) {
+        take(new Box<>(1));
+    }
+}
+"
+);
+
+differential_wording!(
+    reject_a_swapped_supertype_argument,
+    "RejectSwapped",
+    r#"
+public class RejectSwapped {
+    interface Pairish<A, B> { A left(); B right(); }
+    static class Swap<A, B> implements Pairish<B, A> {
+        A a; B b;
+        Swap(A a, B b) { this.a = a; this.b = b; }
+        public B left() { return b; }
+        public A right() { return a; }
+    }
+    public static void main(String[] args) {
+        Pairish<Integer, String> p = new Swap<Integer, String>(3, "s");
+    }
+}
+"#
+);
+
+// After a `<clinit>` that THREW was caught, the catching frame kept the flag
+// that says "my pc re-runs the triggering instruction" — only a normal return
+// cleared it — so the next exception unwinding into that frame was searched
+// one instruction too late, past the end of any `try` whose last instruction
+// is the call. `try { boom(); } catch` stopped catching, and a
+// try-with-resources' `close()` escaped instead of being suppressed.
+differential_test!(
+    a_caught_initializer_failure_leaves_later_catches_working,
+    "AfterInit",
+    r#"
+public class AfterInit {
+    static class Cfg { static int v = Integer.parseInt("nope"); }
+    static void boom() { throw new IllegalStateException("boom"); }
+    static class Res implements AutoCloseable {
+        public void close() { throw new IllegalStateException("close"); }
+    }
+    public static void main(String[] args) {
+        try {
+            System.out.println(Cfg.v);
+        } catch (ExceptionInInitializerError e) {
+            System.out.println("init: " + e.getCause().getClass().getSimpleName());
+        }
+        try {
+            boom();
+        } catch (IllegalStateException e) {
+            System.out.println("caught " + e.getMessage());
+        }
+        try {
+            try (Res r = new Res()) {
+                throw new RuntimeException("body");
+            }
+        } catch (RuntimeException e) {
+            System.out.println(e.getMessage() + " suppressed " + e.getSuppressed().length);
+        }
+        System.out.println("done");
     }
 }
 "#
